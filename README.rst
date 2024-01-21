@@ -2,7 +2,7 @@
  Sopel
 =======
 
-|version| |build| |issues| |alerts| |coverage-status| |license|
+|version| |build| |issues| |coverage-status| |license|
 
 Introduction
 ------------
@@ -28,10 +28,10 @@ for installing from the latest source below.
 Latest source
 =============
 First, either clone the repository with ``git clone
-git://github.com/sopel-irc/sopel.git`` or download a tarball `from GitHub
-<https://github.com/sopel-irc/sopel/releases/latest>`_.
+https://github.com/sopel-irc/sopel.git`` or download a `source archive from
+GitHub <https://github.com/sopel-irc/sopel/archive/refs/heads/master.zip>`_.
 
-Note: Sopel requires Python 3.6+ to run.
+Note: Sopel requires Python 3.8+ to run.
 
 In the source directory (whether cloned or from the tarball) run ``pip install
 -e .``. You can then run ``sopel`` to configure and start the bot.
@@ -97,8 +97,6 @@ Open Collective profile, for transparency.
    :target: https://github.com/sopel-irc/sopel/actions/workflows/ci.yml?query=branch%3Amaster+event%3Apush
 .. |issues| image:: https://img.shields.io/github/issues/sopel-irc/sopel.svg
    :target: https://github.com/sopel-irc/sopel/issues
-.. |alerts| image:: https://img.shields.io/lgtm/alerts/g/sopel-irc/sopel.svg
-   :target: https://lgtm.com/projects/g/sopel-irc/sopel/alerts/
 .. |coverage-status| image:: https://coveralls.io/repos/github/sopel-irc/sopel/badge.svg?branch=master
    :target: https://coveralls.io/github/sopel-irc/sopel?branch=master
 .. |license| image:: https://img.shields.io/pypi/l/sopel.svg

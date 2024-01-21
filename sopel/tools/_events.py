@@ -1,4 +1,4 @@
-from __future__ import generator_stop
+from __future__ import annotations
 
 from enum import Enum
 
@@ -14,6 +14,8 @@ class events(str, Enum):
     # ircds.
     RPL_ISUPPORT = '005'
     RPL_WHOSPCRPL = '354'
+    RPL_INVITELIST = '336'
+    RPL_ENDOFINVITELIST = '337'
 
     # ################################################################### IRC v3
     # ## 3.1
@@ -33,6 +35,8 @@ class events(str, Enum):
     RPL_STARTTLS = '670'
     ERR_STARTTLS = '691'
     # ## 3.2
+    # Bot Mode
+    RPL_WHOISBOT = '335'
     # Metadata
     RPL_WHOISKEYVALUE = '760'
     RPL_KEYVALUE = '761'
@@ -181,8 +185,8 @@ class events(str, Enum):
     RPL_MYINFO = '004'
     RPL_BOUNCE = '005'
     RPL_UNIQOPIS = '325'
-    RPL_INVITELIST = '346'
-    RPL_ENDOFINVITELIST = '347'
+    RPL_INVEXLIST = '346'
+    RPL_ENDOFINVEXLIST = '347'
     RPL_EXCEPTLIST = '348'
     RPL_ENDOFEXCEPTLIST = '349'
     RPL_YOURESERVICE = '383'

@@ -1,11 +1,30 @@
-"""Triggers are how Sopel tells callables about their runtime context."""
-from __future__ import generator_stop
+"""Triggers are how Sopel tells callables about their runtime context.
 
-import datetime
+A :class:`~.trigger.Trigger` is the main type of user input plugins will see.
+
+Sopel uses :class:`~.trigger.PreTrigger`\\s internally while processing
+incoming IRC messages. Plugin authors can reasonably expect that their code
+will never receive one. They are documented here for completeness, and for the
+aid of Sopel's core development.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
 import re
+from typing import (
+    cast,
+    Match,
+    Optional,
+    Sequence,
+    TYPE_CHECKING,
+)
 
 from sopel import formatting, tools
 from sopel.tools import web
+from sopel.tools.identifiers import Identifier, IdentifierFactory
+
+if TYPE_CHECKING:
+    from sopel import config
 
 
 __all__ = [
@@ -13,8 +32,28 @@ __all__ = [
     'Trigger',
 ]
 
+COMMANDS_WITH_CONTEXT = frozenset({
+    'INVITE',
+    'JOIN',
+    'KICK',
+    'MODE',
+    'NOTICE',
+    'PART',
+    'PRIVMSG',
+    'TOPIC',
+})
+"""Set of commands with a :attr:`trigger.sender<Trigger.sender>`.
 
-class PreTrigger(object):
+Most IRC messages a plugin will want to handle (channel messages and PMs) are
+associated with a context, exposed in the Trigger's ``sender`` property.
+However, not *all* commands can be directly associated to a channel or nick.
+
+For IRC message types other than those listed here, the ``trigger``\'s
+``sender`` property will be ``None``.
+"""
+
+
+class PreTrigger:
     """A parsed raw message from the server.
 
     :param str own_nick: the bot's own IRC nickname
@@ -35,6 +74,10 @@ class PreTrigger(object):
         The IRC command's arguments.
 
         These are split on spaces, per the IRC protocol.
+
+    .. py:attribute:: ctcp
+
+        The CTCP command name, if present (``None`` otherwise)
 
     .. py:attribute:: event
 
@@ -62,6 +105,14 @@ class PreTrigger(object):
     .. py:attribute:: sender
 
         Channel name or query where this message was received.
+
+        .. warning::
+
+            The ``sender`` Will be ``None`` for commands that have no implicit
+            channel or private-message context, for example AWAY or QUIT.
+
+            The :attr:`COMMANDS_WITH_CONTEXT` attribute lists IRC commands for
+            which ``sender`` can be relied upon.
 
     .. py:attribute:: tags
 
@@ -95,35 +146,53 @@ class PreTrigger(object):
         If the IRC server sent a message tag indicating when *it* received the
         message, that is used instead of the time when Sopel received it.
 
+        .. versionchanged:: 8.0
+            Now a timezone-aware ``datetime`` object.
+
     .. py:attribute:: user
 
         The sender's local username.
 
     """
     component_regex = re.compile(r'([^!]*)!?([^@]*)@?(.*)')
-    intent_regex = re.compile('\x01(\\S+) ?(.*)\x01')
+    ctcp_regex = re.compile('\x01(\\S+) ?(.*)\x01')
 
-    def __init__(self, own_nick, line, url_schemes=None):
+    def __init__(
+        self,
+        own_nick: Identifier,
+        line: str,
+        url_schemes: Optional[Sequence] = None,
+        identifier_factory: IdentifierFactory = Identifier,
+        statusmsg_prefixes: tuple[str, ...] = tuple(),
+    ):
+        self.make_identifier: IdentifierFactory = identifier_factory
         line = line.strip('\r\n')
-        self.line = line
-        self.urls = tuple()
-        self.plain = ''
+        self.line: str = line
+        self.urls: tuple[str, ...] = tuple()
+        self.plain: str = ''
+        self.ctcp: Optional[str] = None
 
         # Break off IRCv3 message tags, if present
-        self.tags = {}
+        self.tags: dict[str, Optional[str]] = {}
         if line.startswith('@'):
             tagstring, line = line.split(' ', 1)
-            for tag in tagstring[1:].split(';'):
-                tag = tag.split('=', 1)
+            for raw_tag in tagstring[1:].split(';'):
+                tag = raw_tag.split('=', 1)
                 if len(tag) > 1:
                     self.tags[tag[0]] = tag[1]
                 else:
                     self.tags[tag[0]] = None
 
-        self.time = datetime.datetime.utcnow()
+        # Client time or server time
+        self.time = datetime.now(timezone.utc)
         if 'time' in self.tags:
+            # ensure "time" is a string (typecheck)
+            tag_time = self.tags['time'] or ''
             try:
-                self.time = datetime.datetime.strptime(self.tags['time'], '%Y-%m-%dT%H:%M:%S.%fZ')
+                self.time = datetime.strptime(
+                    tag_time,
+                    "%Y-%m-%dT%H:%M:%S.%fZ",
+                ).replace(tzinfo=timezone.utc)
             except ValueError:
                 pass  # Server isn't conforming to spec, ignore the server-time
 
@@ -131,6 +200,7 @@ class PreTrigger(object):
         # Example: line = ':Sopel!foo@bar PRIVMSG #sopel :foobar!'
         #          print(hostmask)  # Sopel!foo@bar
         # All lines start with ":" except PING.
+        self.hostmask: Optional[str]
         if line.startswith(':'):
             self.hostmask, line = line[1:].split(' ', 1)
         else:
@@ -151,33 +221,43 @@ class PreTrigger(object):
             self.args.append(self.text)
         else:
             self.args = line.split(' ')
-            self.text = self.args[-1]
+            # see `text` attr documentation above, and #2360
+            self.text = self.args[-1] if len(self.args) > 1 else ''
 
         self.event = self.args[0]
         self.args = self.args[1:]
-        components = PreTrigger.component_regex.match(self.hostmask or '').groups()
-        self.nick, self.user, self.host = components
-        self.nick = tools.Identifier(self.nick)
 
-        # If we have arguments, the first one is the sender
-        # Unless it's a QUIT event
-        if self.args and self.event != 'QUIT':
-            target = tools.Identifier(self.args[0])
-        else:
-            target = None
+        # The regex will always match any string, even an empty one
+        components_match = cast(
+            Match, PreTrigger.component_regex.match(self.hostmask or ''))
+        nick, self.user, self.host = components_match.groups()
+        self.nick: Identifier = self.make_identifier(nick)
 
-        # Unless we're messaging the bot directly, in which case that second
-        # arg will be our bot's name.
-        if target and target.lower() == own_nick.lower():
-            target = self.nick
+        # If we have arguments, the first one is *usually* the sender,
+        # most numerics and certain general events (e.g. QUIT) excepted
+        target: Optional[Identifier] = None
+        status_prefix: Optional[str] = None
+
+        if self.args and self.event in COMMANDS_WITH_CONTEXT:
+            raw_target = self.args[0]
+            if statusmsg_prefixes and raw_target[0] in statusmsg_prefixes:
+                status_prefix, raw_target = raw_target[0], raw_target[1:]
+            target = self.make_identifier(raw_target)
+
+            # Unless we're messaging the bot directly, in which case that
+            # second arg will be our bot's name.
+            if target.lower() == own_nick.lower():
+                target = self.nick
+
         self.sender = target
+        self.status_prefix = status_prefix
 
-        # Parse CTCP into a form consistent with IRCv3 intents
+        # Parse CTCP
         if self.event == 'PRIVMSG' or self.event == 'NOTICE':
-            intent_match = PreTrigger.intent_regex.match(self.args[-1])
-            if intent_match:
-                intent, message = intent_match.groups()
-                self.tags['intent'] = intent
+            ctcp_match = PreTrigger.ctcp_regex.match(self.args[-1])
+            if ctcp_match is not None:
+                ctcp, message = ctcp_match.groups()
+                self.ctcp = ctcp
                 self.args[-1] = message or ''
 
             # Search URLs after CTCP parsing
@@ -216,24 +296,62 @@ class Trigger(str):
 
     Note that CTCP messages (``PRIVMSG``\\es and ``NOTICE``\\es which start
     and end with ``'\\x01'``) will have the ``'\\x01'`` bytes stripped, and
-    the command (e.g. ``ACTION``) placed mapped to the ``'intent'`` key in
-    :attr:`Trigger.tags`.
+    :attr:`trigger.ctcp <ctcp>` will contain the command (e.g. ``ACTION``).
+
+    .. note::
+
+        CTCP used to be stored as the ``intent`` tag. Since message intents
+        never made it past the IRCv3 draft stage, Sopel dropped support for
+        them in Sopel 8.
+
     """
     sender = property(lambda self: self._pretrigger.sender)
     """Where the message arrived from.
 
-    :type: :class:`~.tools.Identifier`
+    :type: :class:`~sopel.tools.identifiers.Identifier`
 
     This will be a channel name for "regular" (channel) messages, or the nick
     that sent a private message.
 
     You can check if the trigger comes from a channel or a nick with its
-    :meth:`~sopel.tools.Identifier.is_nick` method::
+    :meth:`~sopel.tools.identifiers.Identifier.is_nick` method::
 
         if trigger.sender.is_nick():
             # message sent from a private message
         else:
             # message sent from a channel
+
+    .. important::
+
+        If the message was sent to a `specific status prefix`__, the ``sender``
+        does not include the status prefix. Be sure to use the
+        :attr:`status_prefix` when replying.
+
+        Note that the ``bot`` argument passed to plugin callables is a
+        :class:`~sopel.bot.SopelWrapper` that handles this for the default
+        ``destination`` of the methods it overrides (most importantly,
+        :meth:`~sopel.bot.SopelWrapper.say` &
+        :meth:`~sopel.bot.SopelWrapper.reply`).
+
+    .. warning::
+
+        The ``sender`` Will be ``None`` for commands that have no implicit
+        channel or private-message context, for example AWAY or QUIT.
+
+        The :attr:`COMMANDS_WITH_CONTEXT` attribute lists IRC commands for
+        which ``sender`` can be relied upon.
+
+    .. __: https://modern.ircdocs.horse/#statusmsg-parameter
+    """
+    status_prefix = property(lambda self: self._pretrigger.status_prefix)
+    """The prefix used for the :attr:`sender` for status-specific messages.
+
+    :type: Optional[str]
+
+    This will be ``None`` by default. If a message is sent to a channel, it may
+    have a status prefix for status-specific messages. In that case, the prefix
+    is removed from the channel's identifier (see :attr:`sender`) and saved to
+    this attribute.
     """
     time = property(lambda self: self._pretrigger.time)
     """When the message was received.
@@ -272,7 +390,7 @@ class Trigger(str):
     nick = property(lambda self: self._pretrigger.nick)
     """The nickname who sent the message.
 
-    :type: :class:`~.tools.Identifier`
+    :type: :class:`~sopel.tools.identifiers.Identifier`
     """
     host = property(lambda self: self._pretrigger.host)
     """The hostname of the person who sent the message.
@@ -288,7 +406,7 @@ class Trigger(str):
     ``PRIVMSG``. Other event types like ``NOTICE``, ``NICK``, ``TOPIC``,
     ``KICK``, etc. must be requested using :func:`.plugin.event`.
     """
-    ctcp = property(lambda self: self.tags.get('intent', None))
+    ctcp = property(lambda self: self._pretrigger.ctcp)
     """The CTCP command (if any).
 
     :type: str
@@ -301,8 +419,9 @@ class Trigger(str):
     .. important::
 
         Use this attribute instead of the ``intent`` tag in :attr:`tags`.
-        Message intents never made it past the IRCv3 draft stage, and Sopel will
-        drop support for them in a future release.
+        Message intents never made it past the IRCv3 draft stage, and Sopel
+        dropped support for them in Sopel 8.
+
     """
     match = property(lambda self: self._match)
     """The :ref:`Match object <match-objects>` for the triggering line.
@@ -405,8 +524,22 @@ class Trigger(str):
     the message isn't logged in to services, this property will be ``None``.
     """
 
-    def __new__(cls, config, message, match, account=None):
-        self = str.__new__(cls, message.args[-1] if message.args else '')
+    def __new__(
+        cls,
+        settings: config.Config,
+        message: PreTrigger,
+        match: Match,
+        account: Optional[str] = None,
+    ) -> 'Trigger':
+        return str.__new__(cls, message.args[-1] if message.args else '')
+
+    def __init__(
+        self,
+        settings: config.Config,
+        message: PreTrigger,
+        match: Match,
+        account: Optional[str] = None,
+    ) -> None:
         self._account = account
         self._pretrigger = message
         self._match = match
@@ -419,14 +552,12 @@ class Trigger(str):
                 pattern.match('@'.join((self.nick, self.host)))
             )
 
-        if config.core.owner_account:
-            self._owner = config.core.owner_account == self.account
+        if settings.core.owner_account:
+            self._owner = settings.core.owner_account == self.account
         else:
-            self._owner = match_host_or_nick(config.core.owner)
+            self._owner = match_host_or_nick(settings.core.owner)
         self._admin = (
             self._owner or
-            self.account in config.core.admin_accounts or
-            any(match_host_or_nick(item) for item in config.core.admins)
+            self.account in settings.core.admin_accounts or
+            any(match_host_or_nick(item) for item in settings.core.admins)
         )
-
-        return self

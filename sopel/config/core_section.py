@@ -1,6 +1,6 @@
-from __future__ import generator_stop
+from __future__ import annotations
 
-import os.path
+from ssl import TLSVersion
 
 from sopel.config.types import (
     BooleanAttribute,
@@ -12,7 +12,7 @@ from sopel.config.types import (
     StaticSection,
     ValidatedAttribute,
 )
-from sopel.tools import Identifier
+from sopel.tools.identifiers import Identifier
 
 
 COMMAND_DEFAULT_PREFIX = r'\.'
@@ -23,27 +23,18 @@ URL_DEFAULT_SCHEMES = ['http', 'https', 'ftp']
 """Default URL schemes allowed for URLs."""
 
 
-def _find_certs():
-    """Find the TLS root CA store.
+def _parse_ssl_version(var: str) -> TLSVersion:
+    """Parse an ssl_version config variable.
 
-    :returns: path to CA store file
-    :rtype: str
+    :param var: The input string, e.g. "TLSv1_3".
+    :return: The TLSVersion object for that version.
     """
-    # check if the root CA store is at a known location
-    locations = [
-        '/etc/pki/tls/cert.pem',  # best first guess
-        '/etc/ssl/certs/ca-certificates.crt',  # Debian
-        '/etc/ssl/cert.pem',  # FreeBSD base OpenSSL
-        '/usr/local/openssl/cert.pem',  # FreeBSD userland OpenSSL
-        '/etc/pki/tls/certs/ca-bundle.crt',  # RHEL 6 / Fedora
-        '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',  # RHEL 7 / CentOS
-        '/etc/pki/tls/cacert.pem',  # OpenELEC
-        '/etc/ssl/ca-bundle.pem',  # OpenSUSE
-    ]
-    for certs in locations:
-        if os.path.isfile(certs):
-            return certs
-    return None
+    try:
+        return TLSVersion[var]
+    except KeyError:
+        raise ValueError(
+            "'{}' is not a valid TLSVersion. Try e.g. TLSv1_3'".format(var)
+        )
 
 
 def configure(config):
@@ -142,6 +133,92 @@ class CoreSection(StaticSection):
     :func:`~sopel.plugin.nickname_command`.
     """
 
+    antiloop_repeat_text = ValidatedAttribute(
+        'antiloop_repeat_text', default='...')
+    """The replacement text sent when detecting a repeated message.
+
+    :default: ``...``
+
+    This is equivalent to the default value:
+
+    .. code-block:: ini
+
+        antiloop_repeat_text = ...
+
+    .. seealso::
+
+        The :ref:`Loop Prevention` chapter to learn what each antiloop-related
+        setting does.
+
+    .. versionadded:: 8.0
+    """
+
+    antiloop_silent_after = ValidatedAttribute(
+        'antiloop_silent_after', int, default=3)
+    """How many times the anti-looping message will be sent before stopping.
+
+    :default: ``3``
+
+    This is equivalent to the default value:
+
+    .. code-block:: ini
+
+        antiloop_silent_after = 3
+
+    .. seealso::
+
+        The :ref:`Loop Prevention` chapter to learn what each antiloop-related
+        setting does.
+
+    .. versionadded:: 8.0
+    """
+
+    antiloop_threshold = ValidatedAttribute(
+        'antiloop_threshold', int, default=5)
+    """How many times a message can be repeated without anti-looping action.
+
+    :default: ``5``
+
+    This is equivalent to the default value:
+
+    .. code-block:: ini
+
+        antiloop_threshold = 5
+
+    You can deactivate the anti-looping feature (not recommended) by setting
+    this to ``0``:
+
+    .. code-block:: ini
+
+        antiloop_threshold = 0
+
+    .. seealso::
+
+        The :ref:`Loop Prevention` chapter to learn what each antiloop-related
+        setting does.
+
+    .. versionadded:: 8.0
+    """
+
+    antiloop_window = ValidatedAttribute('antiloop_window', int, default=120)
+    """The time period (in seconds) checked when detecting repeated messages.
+
+    :default: ``120``
+
+    This is equivalent to the default value:
+
+    .. code-block:: ini
+
+        antiloop_window = 120
+
+    .. seealso::
+
+        The :ref:`Loop Prevention` chapter to learn what each antiloop-related
+        setting does.
+
+    .. versionadded:: 8.0
+    """
+
     auth_method = ChoiceAttribute('auth_method', choices=[
         'nickserv', 'authserv', 'Q', 'sasl', 'server', 'userserv'])
     """Simple method to authenticate with the server.
@@ -228,8 +305,8 @@ class CoreSection(StaticSection):
 
     """
 
-    ca_certs = FilenameAttribute('ca_certs', default=_find_certs())
-    """The path to the CA certs ``.pem`` file.
+    ca_certs = FilenameAttribute('ca_certs')
+    """The path to the CA certs ``PEM`` file.
 
     Example:
 
@@ -237,8 +314,7 @@ class CoreSection(StaticSection):
 
         ca_certs = /etc/ssl/certs/ca-certificates.crt
 
-    If not specified, Sopel will try to find the certificate trust store
-    itself from a set of known locations.
+    If not specified, the system default will be used.
 
     If the given value is not an absolute path, it will be interpreted relative
     to the directory containing the config file with which Sopel was started.
@@ -413,10 +489,10 @@ class CoreSection(StaticSection):
     """
 
     default_time_format = ValidatedAttribute('default_time_format',
-                                             default='%Y-%m-%d - %T%Z')
+                                             default='%Y-%m-%d - %T %Z')
     """The default format to use for time in messages.
 
-    :default: ``%Y-%m-%d - %T%Z``
+    :default: ``%Y-%m-%d - %T %Z``
 
     Used when plugins format times with :func:`sopel.tools.time.format_time`.
 
@@ -424,7 +500,7 @@ class CoreSection(StaticSection):
 
     .. code-block:: ini
 
-        default_time_format = %Y-%m-%d - %T%Z
+        default_time_format = %Y-%m-%d - %T %Z
 
     .. seealso::
 
@@ -564,9 +640,13 @@ class CoreSection(StaticSection):
     """
 
     flood_max_wait = ValidatedAttribute('flood_max_wait', float, default=2)
-    """How much time to wait at most when flood protection kicks in.
+    """How many seconds to wait at most when flood protection kicks in.
 
     :default: ``2``
+
+    .. note::
+
+        If the maximum wait is 0, flood protection is effectively disabled.
 
     This is equivalent to the default value:
 
@@ -676,8 +756,11 @@ class CoreSection(StaticSection):
     def homedir(self):
         """The directory in which various files are stored at runtime.
 
-        By default, this is the same directory as the config file. It cannot be
-        changed at runtime.
+        Specifying the ``homedir`` option is useful for e.g. :doc:`running Sopel
+        as a system service </run/service>`.
+
+        If not set, the config file's parent directory will be used. This value
+        cannot be changed at runtime.
         """
         return self._parent.homedir
 
@@ -697,9 +780,10 @@ class CoreSection(StaticSection):
     host_blocks = ListAttribute('host_blocks')
     """A list of hostnames which Sopel should ignore.
 
-    Messages from any user whose connection hostname matches one of these
-    values will be ignored. :ref:`Regular expression syntax <re-syntax>`
-    is supported, so remember to escape special characters:
+    Sopel will :ref:`ignore <Ignoring Users>` messages from any user whose
+    connection hostname matches one of these values.
+    :ref:`Regular expression syntax <re-syntax>` is supported, so remember to
+    escape special characters:
 
     .. code-block:: ini
 
@@ -712,10 +796,11 @@ class CoreSection(StaticSection):
 
     .. note::
 
-        We are working on a better block system; see `issue #1355`__ for more
-        information and update.
+        :ref:`Plugin callables` with the :func:`.plugin.unblockable` decorator
+        run regardless of matching ``*_blocks`` entries.
 
-    .. __: https://github.com/sopel-irc/sopel/issues/1355
+        We are working toward a better block system; see :issue:`1355` for more
+        information and updates.
 
     """
 
@@ -742,7 +827,7 @@ class CoreSection(StaticSection):
     :default: ``logs``
 
     If the given value is not an absolute path, it will be interpreted relative
-    to the directory containing the config file with which Sopel was started.
+    to the :attr:`homedir` of the config file with which Sopel was started.
 
     .. seealso::
 
@@ -788,17 +873,21 @@ class CoreSection(StaticSection):
 
     logging_channel_level = ChoiceAttribute('logging_channel_level',
                                             ['CRITICAL', 'ERROR', 'WARNING',
-                                             'INFO', 'DEBUG'],
+                                             'INFO'],
                                             'WARNING')
     """The lowest severity of logs to display in IRC channel logs.
-
-    If not specified, this falls back to using :attr:`logging_level`.
 
     .. seealso::
 
         The :ref:`Log to a Channel` chapter.
 
     .. versionadded:: 7.0
+    .. versionchanged:: 8.0
+
+        No longer uses the value of :attr:`logging_level` if not set. Removed
+        ``DEBUG`` from the available choices; setting it caused the bot to get
+        caught in an ever-increasing flood prevention loop.
+
     """
 
     logging_datefmt = ValidatedAttribute('logging_datefmt')
@@ -865,13 +954,19 @@ class CoreSection(StaticSection):
 
     """
 
-    modes = ValidatedAttribute('modes', default='B')
+    modes = ValidatedAttribute('modes')
     """User modes to be set on connection.
-
-    :default: ``B``
 
     Include only the mode letters; this value is automatically prefixed with
     ``+`` before Sopel sends the MODE command to IRC.
+
+    .. versionchanged:: 8.0.0
+
+        Now empty by default. Previous default was ``B``, which has been
+        dropped in favor of the formal `bot mode specification`__.
+
+        .. __: https://ircv3.net/specs/extensions/bot-mode
+
     """
 
     name = ValidatedAttribute('name', default='Sopel: https://sopel.chat/')
@@ -880,7 +975,7 @@ class CoreSection(StaticSection):
     :default: ``Sopel: https://sopel.chat/``
     """
 
-    nick = ValidatedAttribute('nick', Identifier, default=Identifier('Sopel'))
+    nick = ValidatedAttribute('nick', default='Sopel')
     """The nickname for the bot.
 
     :default: ``Sopel``
@@ -948,9 +1043,10 @@ class CoreSection(StaticSection):
     nick_blocks = ListAttribute('nick_blocks')
     """A list of nicks which Sopel should ignore.
 
-    Messages from any user whose nickname matches one of these values will be
-    ignored. :ref:`Regular expression syntax <re-syntax>` is supported, so
-    remember to escape special characters:
+    Sopel will :ref:`ignore <Ignoring Users>` messages from any user whose
+    nickname matches one of these values.
+    :ref:`Regular expression syntax <re-syntax>` is supported, so remember to
+    escape special characters:
 
     .. code-block:: ini
 
@@ -964,10 +1060,11 @@ class CoreSection(StaticSection):
 
     .. note::
 
-        We are working on a better block system; see `issue #1355`__ for more
-        information and update.
+        :ref:`Plugin callables` with the :func:`.plugin.unblockable` decorator
+        run regardless of matching ``*_blocks`` entries.
 
-    .. __: https://github.com/sopel-irc/sopel/issues/1355
+        We are working toward a better block system; see :issue:`1355` for more
+        information and updates.
 
     """
 
@@ -1006,21 +1103,21 @@ class CoreSection(StaticSection):
     ``systemd`` or similar.
     """
 
-    port = ValidatedAttribute('port', int, default=6667)
+    port = ValidatedAttribute('port', int, default=6697)
     """The port to connect on.
 
-    :default: ``6667`` normally; ``6697`` if :attr:`use_ssl` is ``True``
+    :default: ``6697``
 
     .. highlight:: ini
 
     **Required**::
 
-        port = 6667
-
-    And usually when SSL is enabled::
-
         port = 6697
-        use_ssl = yes
+
+    Or if SSL is disabled::
+
+        port = 6667
+        use_ssl = false
 
     """
 
@@ -1213,16 +1310,85 @@ class CoreSection(StaticSection):
 
     """
 
-    use_ssl = BooleanAttribute('use_ssl', default=False)
-    """Whether to use a SSL/TLS encrypted connection.
+    ssl_ciphers = ListAttribute(
+        'ssl_ciphers',
+        default=[
+            "ECDHE-ECDSA-AES128-GCM-SHA256",
+            "ECDHE-RSA-AES128-GCM-SHA256",
+            "ECDHE-ECDSA-AES256-GCM-SHA384",
+            "ECDHE-RSA-AES256-GCM-SHA384",
+            "ECDHE-ECDSA-CHACHA20-POLY1305",
+            "ECDHE-RSA-CHACHA20-POLY1305",
+            "DHE-RSA-AES128-GCM-SHA256",
+            "DHE-RSA-AES256-GCM-SHA384",
+        ],
+    )
+    """The cipher suites enabled for SSL/TLS connections.
 
-    :default: ``False``
+    :default: ``ECDHE-ECDSA-AES128-GCM-SHA256
+                ECDHE-RSA-AES128-GCM-SHA256
+                ECDHE-ECDSA-AES256-GCM-SHA384
+                ECDHE-RSA-AES256-GCM-SHA384
+                ECDHE-ECDSA-CHACHA20-POLY1305
+                ECDHE-RSA-CHACHA20-POLY1305
+                DHE-RSA-AES128-GCM-SHA256
+                DHE-RSA-AES256-GCM-SHA384``
 
-    Example with SSL on:
+    The default is the `Mozilla Intermediate configuration`__ as of February
+    2022. This parameter is in OpenSSL format; see the `ciphers manual page`__
+    for your version. This setting cannot be used to configure TLS 1.3.
+
+    .. __: https://wiki.mozilla.org/Security/Server_Side_TLS
+    .. __: https://www.openssl.org/docs/manmaster/man1/ciphers.html
 
     .. code-block:: ini
 
-        use_ssl = yes
+        ssl_ciphers =
+            ECDSA+AES256
+            !SHA1
+
+    .. note::
+
+        Cipher selection is also subject to the available SSL/TLS versions;
+        see :attr:`ssl_minimum_version`.
+
+    """
+
+    ssl_minimum_version = ValidatedAttribute(
+        'ssl_minimum_version',
+        default=TLSVersion.TLSv1_2,
+        parse=_parse_ssl_version,
+        serialize=lambda ver: ver.name,
+    )
+    """The minimum version allowed for SSL/TLS connections.
+
+    :default: ``TLSv1_2``
+
+    You should not set this lower than the default unless the server does not
+    support modern versions. Set this to a :class:`~ssl.TLSVersion` value,
+    e.g. ``TLSv1`` or ``TLSv1_3``.
+
+    .. code-block:: ini
+
+        ssl_minimum_version = TLSv1_3
+
+    .. note::
+
+        To use insecure SSL/TLS versions, you may also need to enable
+        insecure cipher suites. See :attr:`ssl_ciphers`.
+
+    """
+
+    use_ssl = BooleanAttribute('use_ssl', default=True)
+    """Whether to use a SSL/TLS encrypted connection.
+
+    :default: ``True``
+
+    Example with SSL off:
+
+    .. code-block:: ini
+
+        use_ssl = false
 
     """
 
@@ -1248,7 +1414,7 @@ class CoreSection(StaticSection):
 
     .. code-block:: ini
 
-        use_ssl = yes
-        verify_ssl = yes
+        use_ssl = true
+        verify_ssl = true
 
     """

@@ -1,11 +1,11 @@
-from __future__ import generator_stop
+from __future__ import annotations
 
 import inspect
 import logging
 import os
 import sys
 
-from sopel import config, plugins, tools
+from sopel import config, plugins
 
 # Allow clean import *
 __all__ = [
@@ -13,7 +13,6 @@ __all__ = [
     'find_config',
     'add_common_arguments',
     'load_settings',
-    'redirect_outputs',
     'wizard',
     'plugins_wizard',
     # colors
@@ -90,7 +89,7 @@ def wizard(filename):
             os.makedirs(configdir)
             print('Config directory created')
     except Exception:
-        tools.stderr('There was a problem creating {}'.format(configdir))
+        stderr('There was a problem creating {}'.format(configdir))
         raise
 
     name, ext = os.path.splitext(basename)
@@ -117,8 +116,8 @@ def wizard(filename):
     try:
         settings.save()
     except Exception:  # TODO: Be specific
-        tools.stderr("Encountered an error while writing the config file. "
-                     "This shouldn't happen. Check permissions.")
+        stderr("Encountered an error while writing the config file. "
+               "This shouldn't happen. Check permissions.")
         raise
 
     print("Config file written successfully!")
@@ -143,8 +142,8 @@ def plugins_wizard(filename):
     try:
         settings.save()
     except Exception:  # TODO: Be specific
-        tools.stderr("Encountered an error while writing the config file. "
-                     "This shouldn't happen. Check permissions.")
+        stderr("Encountered an error while writing the config file. "
+               "This shouldn't happen. Check permissions.")
         raise
 
     return settings
@@ -199,47 +198,56 @@ def enumerate_configs(config_dir, extension='.cfg'):
             yield item
 
 
-def find_config(config_dir, name, extension='.cfg'):
+def find_config(config_dir: str, name: str, extension: str = '.cfg') -> str:
     """Build the absolute path for the given configuration file ``name``.
 
-    :param str config_dir: path to the configuration directory
-    :param str name: configuration file ``name``
-    :param str extension: configuration file's extension (default to ``.cfg``)
-    :return: the path of the configuration file, either in the current
-             directory or from the ``config_dir`` directory
+    :param config_dir: path to the configuration directory
+    :param name: configuration file ``name``
+    :param extension: configuration file's extension (defaults to ``.cfg``)
+    :return: the absolute path to the configuration file, either in the current
+             directory or in the ``config_dir`` directory
 
-    This function tries different locations:
+    This function appends the extension if absent before checking the following:
 
-    * the current directory
-    * the ``config_dir`` directory with the ``extension`` suffix
-    * the ``config_dir`` directory without a suffix
+    * If ``name`` is an absolute path, it is returned whether it exists or not
+    * If ``name`` exists in the ``config_dir``, the absolute path is returned
+    * If ``name`` exists in the current directory, its absolute path is returned
+    * Otherwise, the path to the nonexistent file within ``config_dir`` is returned
 
     Example::
 
         >>> from sopel.cli import utils
         >>> from sopel import config
+        >>> os.getcwd()
+        '/sopel'
         >>> os.listdir()
         ['local.cfg', 'extra.ini']
         >>> os.listdir(config.DEFAULT_HOMEDIR)
-        ['config.cfg', 'extra.ini', 'plugin.cfg', 'README']
+        ['config.cfg', 'extra.ini', 'logs', 'plugins']
         >>> utils.find_config(config.DEFAULT_HOMEDIR, 'local.cfg')
-        'local.cfg'
-        >>> utils.find_config(config.DEFAULT_HOMEDIR, 'local')
-        '/home/username/.sopel/local'
+        '/sopel/local.cfg'
         >>> utils.find_config(config.DEFAULT_HOMEDIR, 'config')
         '/home/username/.sopel/config.cfg'
         >>> utils.find_config(config.DEFAULT_HOMEDIR, 'extra', '.ini')
         '/home/username/.sopel/extra.ini'
 
-    """
-    if os.path.isfile(name):
-        return os.path.abspath(name)
-    name_ext = name + extension
-    for filename in enumerate_configs(config_dir, extension):
-        if name_ext == filename:
-            return os.path.join(config_dir, name_ext)
+    .. versionchanged:: 8.0
 
-    return os.path.join(config_dir, name)
+        Files in the ``config_dir`` are now preferred, and files without the
+        requested extension are no longer returned.
+
+    """
+    if not name.endswith(extension):
+        name = name + extension
+
+    if os.path.isabs(name):
+        return name
+    conf_dir_name = os.path.join(config_dir, name)
+    if os.path.isfile(conf_dir_name):
+        return conf_dir_name
+    elif os.path.isfile(name):
+        return os.path.abspath(name)
+    return conf_dir_name
 
 
 def add_common_arguments(parser):
@@ -341,30 +349,6 @@ def load_settings(options):
     return config.Config(filename)
 
 
-@tools.deprecated(reason='Obsoleted by modernized logging.',
-                  version='7.0',
-                  removed_in='8.0')
-def redirect_outputs(settings, is_quiet=False):
-    """Redirect ``sys``'s outputs using Sopel's settings.
-
-    :param settings: Sopel's configuration
-    :type settings: :class:`sopel.config.Config`
-    :param bool is_quiet: Optional, set to True to make Sopel's outputs quiet
-
-    Both ``sys.stderr`` and ``sys.stdout`` are redirected to a logfile.
-
-    .. deprecated:: 7.0
-
-        Sopel now uses the built-in logging system for its output, and this
-        function is now deprecated.
-
-    """
-    logfile = os.path.os.path.join(
-        settings.core.logdir, settings.basename + '.stdio.log')
-    sys.stderr = tools.OutputRedirect(logfile, True, is_quiet)
-    sys.stdout = tools.OutputRedirect(logfile, False, is_quiet)
-
-
 def get_many_text(items, one, two, many):
     """Get the right text based on the number of ``items``."""
     message = ''
@@ -383,3 +367,46 @@ def get_many_text(items, one, two, many):
         message = many.format(left=left, last=last)
 
     return message
+
+
+def check_pid(pid):
+    """Check if a process is running with the given ``PID``.
+
+    :param int pid: PID to check
+    :return bool: ``True`` if the given PID is running, ``False`` otherwise
+
+    *Availability: POSIX systems only.*
+
+    .. versionchanged:: 8.0
+
+        Moved from :mod:`sopel.tools` to :mod:`sopel.cli.utils`.
+
+    .. note::
+
+        Matching the :py:func:`os.kill` behavior this function needs on Windows
+        was rejected in
+        `Python issue #14480 <https://bugs.python.org/issue14480>`_, so
+        :func:`check_pid` cannot be used on Windows systems.
+
+    """
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    else:
+        return True
+
+
+def stderr(string):
+    """Print the given ``string`` to stderr.
+
+    :param str string: the string to output
+
+    Just a convenience function.
+
+    .. versionchanged:: 8.0
+
+        Moved from :mod:`sopel.tools` to :mod:`sopel.cli.utils`.
+
+    """
+    print(string, file=sys.stderr)

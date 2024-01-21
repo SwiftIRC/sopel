@@ -2,7 +2,7 @@
 
 .. versionadded:: 7.0
 """
-from __future__ import generator_stop
+from __future__ import annotations
 
 
 from sopel.irc.abstract_backends import AbstractIRCBackend
@@ -39,7 +39,7 @@ class MockIRCBackend(AbstractIRCBackend):
 
     """
     def __init__(self, *args, **kwargs):
-        super(MockIRCBackend, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.message_sent = []
         """List of raw messages sent by the bot.
 
@@ -54,6 +54,9 @@ class MockIRCBackend(AbstractIRCBackend):
 
         Set to ``True`` to make the bot think it is connected.
         """
+
+    def run_forever(self):
+        raise RuntimeError('MockIRCBackend cannot be used to run the client.')
 
     def is_connected(self):
         return self.connected
@@ -76,8 +79,12 @@ class MockIRCBackend(AbstractIRCBackend):
         self.message_sent = []
         return sent
 
+    def on_irc_error(self, pretrigger):
+        # implement abstract method
+        pass
 
-class MockIRCServer(object):
+
+class MockIRCServer:
     """Fake IRC Server that can send messages to a test bot.
 
     :param bot: test bot instance to send messages to
@@ -101,7 +108,7 @@ class MockIRCServer(object):
         ``blocking`` arguments to the instance methods below.
 
     The :class:`~sopel.tests.factories.IRCFactory` factory can be used to
-    create such mock object, either directly or by using ``py.test`` and the
+    create such mock object, either directly or by using ``pytest`` and the
     :func:`~sopel.tests.pytest_plugin.ircfactory` fixture.
 
     .. versionadded:: 7.1
@@ -111,14 +118,13 @@ class MockIRCServer(object):
     def __init__(self, bot, join_threads=True):
         self.bot = bot
         self.join_threads = join_threads
-        # TODO: `blocking` method args below should be made kwarg-ONLY in py3
 
     @property
     def chanserv(self):
         """ChanServ's message prefix."""
         return 'ChanServ!ChanServ@services.'
 
-    def channel_joined(self, channel, users=None, blocking=None):
+    def channel_joined(self, channel, users=None, *, blocking=None):
         """Send events as if the bot just joined a channel.
 
         :param str channel: channel to send message for
@@ -188,7 +194,7 @@ class MockIRCServer(object):
             for t in self.bot.running_triggers:
                 t.join()
 
-    def mode_set(self, channel, flags, users, blocking=None):
+    def mode_set(self, channel, flags, users, *, blocking=None):
         """Send a MODE event for a ``channel``
 
         :param str channel: channel receiving the MODE event
@@ -230,7 +236,7 @@ class MockIRCServer(object):
             for t in self.bot.running_triggers:
                 t.join()
 
-    def join(self, user, channel, blocking=None):
+    def join(self, user, channel, *, blocking=None):
         """Send a ``channel`` JOIN event from ``user``.
 
         :param user: factory for the user who joins the ``channel``
@@ -268,7 +274,7 @@ class MockIRCServer(object):
             for t in self.bot.running_triggers:
                 t.join()
 
-    def say(self, user, channel, text, blocking=None):
+    def say(self, user, channel, text, *, blocking=None):
         """Send a ``PRIVMSG`` to ``channel`` by ``user``.
 
         :param user: factory for the user who sends a message to ``channel``
@@ -307,7 +313,7 @@ class MockIRCServer(object):
             for t in self.bot.running_triggers:
                 t.join()
 
-    def pm(self, user, text, blocking=None):
+    def pm(self, user, text, *, blocking=None):
         """Send a ``PRIVMSG`` to the bot by a ``user``.
 
         :param user: factory for the user object who sends a message
@@ -347,7 +353,7 @@ class MockIRCServer(object):
                 t.join()
 
 
-class MockUser(object):
+class MockUser:
     """Fake user that can generate messages to send to a bot.
 
     :param str nick: nickname
@@ -355,7 +361,7 @@ class MockUser(object):
     :param str host: user's host
 
     The :class:`~sopel.tests.factories.UserFactory` factory can be used to
-    create such mock object, either directly or by using ``py.test`` and the
+    create such mock object, either directly or by using ``pytest`` and the
     :func:`~sopel.tests.pytest_plugin.userfactory` fixture.
     """
     def __init__(self, nick=None, user=None, host=None):

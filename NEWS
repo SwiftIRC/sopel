@@ -2,6 +2,185 @@ This file is used to auto-generate the "Changelog" section of Sopel's website.
 When adding new entries, follow the style guide in NEWS.spec.md to avoid
 causing problems with the site build.
 
+Changes between 7.1.8 and 7.1.9
+===============================
+
+Plugin changes
+--------------
+
+* search: replace deprecated git.io link in messaging [[#2271][]]
+* tell: fix exception when message is missing [[#2264][]]
+
+[#2264]: https://github.com/sopel-irc/sopel/pull/2264
+[#2271]: https://github.com/sopel-irc/sopel/pull/2271
+
+
+Changes between 7.1.7 and 7.1.8
+===============================
+
+Plugin changes
+--------------
+
+* isup: ensure compatibility with newer `requests` versions [[#2235][]]
+* reddit: handle image preview links [[#2245][]]
+* search: per tests of both back-ends, warn more consistently about multiple
+  `site:` operators [[#2254][]]
+* translate: fix accepting language hints for Chinese [[#2242][]]
+* url:
+  * bump user-agent [[#2218][]]
+  * tweak logging levels to better reflect severity [[#2249][]]
+* wikipedia: refine handling of sections with "hatnote" templates [[#2225][]]
+* xkcd: improve reliability of comic search [[#2247][]]
+
+Core changes
+------------
+
+* Formatting tweaks in IRC logging output [[#2250][]]
+* Requirement tweaks to make sure installing on Python 3.4 still works
+  (but if you're still using that, *please* update your Python)
+
+API changes
+-----------
+
+* Fix/improve more documentation [[#2251][]]
+
+[#2218]: https://github.com/sopel-irc/sopel/pull/2218
+[#2225]: https://github.com/sopel-irc/sopel/pull/2225
+[#2235]: https://github.com/sopel-irc/sopel/pull/2235
+[#2242]: https://github.com/sopel-irc/sopel/pull/2242
+[#2245]: https://github.com/sopel-irc/sopel/pull/2245
+[#2247]: https://github.com/sopel-irc/sopel/pull/2247
+[#2249]: https://github.com/sopel-irc/sopel/pull/2249
+[#2250]: https://github.com/sopel-irc/sopel/pull/2250
+[#2251]: https://github.com/sopel-irc/sopel/pull/2251
+[#2254]: https://github.com/sopel-irc/sopel/pull/2254
+
+
+Changes between 7.1.6 and 7.1.7
+===============================
+
+Plugin changes
+--------------
+
+* adminchannel: fix a very old bug in NUH (hostmask) handling [[#2221][]]
+* reddit:
+  * add flair text to submission output [[#2209][]]
+  * further improve link matching [[#2208][], [#2216][]]
+* wiktionary: correctly handle multi-paragraph etymologies [[#2214][]]
+
+Core changes
+------------
+
+* Added an alert if the IRC server registers the bot as a client using a
+  different nickname than what's set in `core.nick` [[#2215][]]
+
+[#2208]: https://github.com/sopel-irc/sopel/pull/2208
+[#2209]: https://github.com/sopel-irc/sopel/pull/2209
+[#2214]: https://github.com/sopel-irc/sopel/pull/2214
+[#2215]: https://github.com/sopel-irc/sopel/pull/2215
+[#2216]: https://github.com/sopel-irc/sopel/pull/2216
+[#2221]: https://github.com/sopel-irc/sopel/pull/2221
+
+
+Changes between 7.1.5 and 7.1.6
+===============================
+
+Plugin changes
+--------------
+
+* reddit: fix regression in shortlink (`redd.it/<postID>`) handling [[#2201][]]
+* url: fix tripping on HTML character entities like `&apos;` if running on
+  Python 3.4+ [[#2204][]]
+* wikipedia: add mobile links to URL handling [[#2201][]]
+
+Core changes
+------------
+
+* Detect UTF-8 locale on Windows [[#2174][]]
+
+API changes
+-----------
+
+* `web.decode()`: use Python's built-in HTML character entity decoder if
+  available [[#2204][]]
+* Fix minor documentation error [[#2196][]]
+
+[#2174]: https://github.com/sopel-irc/sopel/pull/2174
+[#2196]: https://github.com/sopel-irc/sopel/pull/2196
+[#2201]: https://github.com/sopel-irc/sopel/pull/2201
+[#2202]: https://github.com/sopel-irc/sopel/pull/2202
+[#2204]: https://github.com/sopel-irc/sopel/pull/2204
+
+
+Changes between 7.1.4 and 7.1.5
+===============================
+
+Since 7.1.4 was released, an [expiring TLS root certificate][le-expiration]
+caused us some problems in the old CI system we're still using for Sopel 7.1.x
+to run tests against EOL versions of Python. Our workaround in [#2192][]
+(basically "Workaround 1" from [this OpenSSL blog post][openssl-102-fixes])
+might be of use to anyone still running Sopel on an old system.
+
+Core changes
+------------
+
+* Fixed incorrect behavior during unrecognized SASL authentication [[#2190][]]
+* Ignore case when checking config sections for "defined" settings [[#2193][]]
+
+[#2190]: https://github.com/sopel-irc/sopel/pull/2190
+[#2192]: https://github.com/sopel-irc/sopel/pull/2192
+[#2193]: https://github.com/sopel-irc/sopel/pull/2193
+[le-expiration]: https://letsencrypt.org/2021/10/01/cert-chaining-help.html
+[openssl-102-fixes]: https://www.openssl.org/blog/blog/2021/09/13/LetsEncryptRootCertExpire/
+
+
+Changes between 7.1.3 and 7.1.4
+===============================
+
+Plugin changes
+--------------
+
+* reddit: prevent comment links from also displaying post info [[#2176][]]
+
+[#2176]: https://github.com/sopel-irc/sopel/pull/2176
+
+
+Changes between 7.1.2 and 7.1.3
+===============================
+
+Plugin changes
+--------------
+
+* announce: fix Python 3 compatibility [[#2166][]]
+* reddit: fix handling post links with parameters, e.g. sorting [[#2163][]]
+* reddit: silence PRAW update notices [[#2171][]]
+* tell: don't strip IRC formatting at message start [[#2162][]]
+* translate: better error handling in `.mangle` [[#2160][]]
+* wikipedia: skip messagebox template contents for cleaner snippets [[#2159][]]
+* wikipedia: improve handling of links to transcluded sections [[#2168][]]
+
+Core changes
+------------
+
+* Fixed showing plugin information in `sopel-plugins` CLI tool even if loading
+  the plugin fails [[#2135][]]
+* Stop warning about `parse == bool` configuration settings in 7.x [[#2164][]]
+  * This warning will return in Sopel 8.0, a major release which will be a
+    more natural time for plugin maintainers to release compatibility updates.
+* Fixed `requests` requirement on Python 3.3 [[#2172][]]
+
+[#2135]: https://github.com/sopel-irc/sopel/pull/2135
+[#2159]: https://github.com/sopel-irc/sopel/pull/2159
+[#2160]: https://github.com/sopel-irc/sopel/pull/2160
+[#2162]: https://github.com/sopel-irc/sopel/pull/2162
+[#2163]: https://github.com/sopel-irc/sopel/pull/2163
+[#2164]: https://github.com/sopel-irc/sopel/pull/2164
+[#2166]: https://github.com/sopel-irc/sopel/pull/2166
+[#2168]: https://github.com/sopel-irc/sopel/pull/2168
+[#2171]: https://github.com/sopel-irc/sopel/pull/2171
+[#2172]: https://github.com/sopel-irc/sopel/pull/2172
+
+
 Changes between 7.1.1 and 7.1.2
 ===============================
 

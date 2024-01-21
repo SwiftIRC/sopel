@@ -1,22 +1,23 @@
-# ASCII ONLY IN THIS FILE THOUGH!!!!!!!
-# Python does some stupid bullshit of respecting LC_ALL over the encoding on the
-# file, so in order to undo Python's ridiculous fucking idiocy, we have to have
-# our own check.
+"""
+Sopel is a simple, easy-to-use, open-source IRC utility bot, written in Python.
 
+It’s designed to be easy to use, easy to run, and easy to extend.
+"""
+#
 # Copyright 2008, Sean B. Palmer, inamidst.com
 # Copyright 2012, Elsie Powell, http://embolalia.com
 # Copyright 2012, Elad Alfassa <elad@fedoraproject.org>
 #
 # Licensed under the Eiffel Forum License 2.
 
-from __future__ import generator_stop
+from __future__ import annotations
 
 from collections import namedtuple
+import importlib.metadata
 import locale
 import re
 import sys
 
-import pkg_resources
 
 __all__ = [
     'bot',
@@ -34,19 +35,23 @@ __all__ = [
 ]
 
 loc = locale.getlocale()
-if not loc[1] or 'UTF-8' not in loc[1]:
-    print('WARNING!!! You are running with a non-UTF8 locale environment '
-          'variable (e.g. LC_ALL is set to "C"), which makes Python 3 do '
-          'stupid things. If you get strange errors, please set it to '
+if not loc[1] or ('UTF-8' not in loc[1] and 'utf8' not in loc[1]):
+    print('Warning: Running with a non-UTF8 locale. If you see strange '
+          'encoding errors, try setting the LC_ALL environment variable to '
           'something like "en_US.UTF-8".', file=sys.stderr)
 
 
-__version__ = pkg_resources.get_distribution('sopel').version
+__version__ = importlib.metadata.version('sopel')
 
 
 def _version_info(version=__version__):
     regex = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:[\-\.]?(a|b|rc)(\d+))?.*')
-    version_groups = regex.match(version).groups()
+    version_match = regex.match(version)
+
+    if version_match is None:
+        raise RuntimeError("Can't parse version number!")
+
+    version_groups = version_match.groups()
     major, minor, micro = (int(piece) for piece in version_groups[0:3])
     level = version_groups[3]
     serial = int(version_groups[4] or 0)
@@ -60,9 +65,10 @@ def _version_info(version=__version__):
         level = 'final'
     else:
         level = 'alpha'
-    version_type = namedtuple('version_info',
-                              'major, minor, micro, releaselevel, serial')
-    return version_type(major, minor, micro, level, serial)
+
+    VersionInfo = namedtuple('VersionInfo',
+                             'major, minor, micro, releaselevel, serial')
+    return VersionInfo(major, minor, micro, level, serial)
 
 
 version_info = _version_info()

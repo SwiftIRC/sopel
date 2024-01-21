@@ -2,35 +2,20 @@
 Testing tools
 =============
 
+The best code comes with unit tests. Sopel provides a :doc:`pytest plugin
+<tests/pytest>` with standard fixtures; :doc:`factories <tests/factories>` and
+:doc:`mocks <tests/mocks>` to support writing tests; and the
+:func:`~.tests.rawlist` function to help analyze the mocked-up bot's output.
 
-Common tools
-============
+.. toctree::
+   :titlesonly:
+
+   tests/pytest
+   tests/factories
+   tests/mocks
+
+sopel.tests
+===========
 
 .. automodule:: sopel.tests
-   :members:
-
-Fixtures with py.test
-=====================
-
-.. automodule:: sopel.tests.pytest_plugin
-   :members:
-
-
-Factories
-=========
-
-.. automodule:: sopel.tests.factories
-   :members:
-
-
-Mocks
-=====
-
-.. automodule:: sopel.tests.mocks
-   :members:
-
-Old testing tools
-=================
-
-.. automodule:: sopel.test_tools
    :members:

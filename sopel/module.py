@@ -5,8 +5,9 @@
     Use :mod:`sopel.plugin` instead. This will be removed in Sopel 9.
 
 """
-from __future__ import generator_stop
+from __future__ import annotations
 
+from sopel.lifecycle import deprecated
 # Import everything from sopel.plugin at the time of replacement.
 # Everything new from this point on must *not* leak here.
 # Therefore, don't add anything to this import list. Ever.
@@ -42,6 +43,20 @@ from sopel.plugin import (  # noqa
 )
 
 
+deprecated(
+    'sopel.module has been replaced by sopel.plugin',
+    version='8.0',
+    removed_in='9.0',
+    func=lambda *args: ...,
+)()
+
+
+@deprecated(
+    '`@intent` is replaced by `sopel.plugin.ctcp`',
+    version='7.1',
+    removed_in='9.0',
+    warning_in='8.0',
+)
 def intent(*intent_list):
     """Decorate a callable to trigger on intent messages.
 

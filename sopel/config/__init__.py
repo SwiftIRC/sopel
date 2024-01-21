@@ -47,12 +47,11 @@ the :class:`Config` object is instantiated; it uses
 # Copyright © 2012, Elad Alfassa <elad@fedoraproject.org>
 # Licensed under the Eiffel Forum License 2.
 
-from __future__ import generator_stop
+from __future__ import annotations
 
 import configparser
 import os
 
-from sopel import tools
 from . import core_section, types
 
 
@@ -86,7 +85,7 @@ class ConfigurationNotFound(ConfigurationError):
     :param str filename: file path that could not be found
     """
     def __init__(self, filename):
-        super(ConfigurationNotFound, self).__init__(None)
+        super().__init__(None)
         self.filename = filename
         """Path to the configuration file that could not be found."""
 
@@ -94,7 +93,7 @@ class ConfigurationNotFound(ConfigurationError):
         return 'Unable to find the configuration file %s' % self.filename
 
 
-class Config(object):
+class Config:
     """The bot's configuration.
 
     :param str filename: the configuration file to load and use to populate this
@@ -193,10 +192,9 @@ class Config(object):
             still worth keeping in mind.
 
         """
-        cfgfile = open(self.filename, 'w')
-        self.parser.write(cfgfile)
-        cfgfile.flush()
-        cfgfile.close()
+        with open(self.filename, 'w') as cfgfile:
+            self.parser.write(cfgfile)
+            cfgfile.flush()
 
     def add_section(self, name):
         """Add a new, empty section to the config file.
@@ -279,7 +277,7 @@ class Config(object):
             )
         setattr(self, name, cls_(self, name, validate=validate))
 
-    class ConfigSection(object):
+    class ConfigSection:
         """Represents a section of the config file.
 
         :param str name: name of this section
@@ -311,29 +309,6 @@ class Config(object):
             if type(value) is list:
                 value = ','.join(value)
             self._parent.parser.set(self._name, name, value)
-
-        @tools.deprecated(
-            'No longer used; replaced by a dedicated ListAttribute type.'
-            '7.0', '8.0')
-        def get_list(self, name):
-            """Legacy way of getting a list from a config value.
-
-            :param str name: name of the attribute to fetch and interpret as a list
-            :return: the value of ``name`` as a list
-            :rtype: list
-
-            .. deprecated:: 7.0
-                Use :class:`~.types.ListAttribute` when storing a list value.
-                This legacy method will be removed in Sopel 8.0.
-            """
-            value = getattr(self, name)
-            if not value:
-                return []
-            if isinstance(value, str):
-                value = value.split(',')
-                # Keep the split value, so we don't have to keep doing this
-                setattr(self, name, value)
-            return value
 
     def __getattr__(self, name):
         if name in self.parser.sections():
@@ -368,7 +343,7 @@ class Config(object):
         d = 'n'
         if default:
             d = 'y'
-        ans = tools.get_input(question + ' (y/n)? [' + d + '] ')
+        ans = input(question + ' (y/n)? [' + d + '] ')
         if not ans:
             ans = d
         return ans.lower() == 'y'

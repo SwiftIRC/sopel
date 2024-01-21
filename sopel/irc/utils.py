@@ -1,34 +1,20 @@
+""":mod:`sopel.irc.utils` contains low-level tools for IRC protocol handling.
+
+.. warning::
+
+    This is all internal code, not intended for direct use by plugins. It is
+    subject to change between versions, even patch releases, without any
+    advance notice.
+
+"""
 # Copyright 2019, Florian Strzelecki <florian.strzelecki@gmail.com>
 #
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
-import collections
+from typing import NamedTuple
 
-from dns import rdtypes, resolver
-
-from sopel.tools import deprecated
-
-
-MYINFO_ARGS = ['client', 'servername', 'version']
-
-
-def get_cnames(domain):
-    """Determine the CNAMEs for a given domain.
-
-    :param str domain: domain to check
-    :return: list (of str)
-    """
-    try:
-        answer = resolver.query(domain, "CNAME")
-    except resolver.NoAnswer:
-        return []
-
-    return [
-        data.to_text()[:-1]
-        for data in answer
-        if isinstance(data, rdtypes.ANY.CNAME.CNAME)
-    ]
+from sopel.lifecycle import deprecated
 
 
 def safe(string):
@@ -62,49 +48,28 @@ def safe(string):
     return string
 
 
-class CapReq(object):
-    """Represents a pending CAP REQ request.
+@deprecated('CapReq is obsolete.', version='8.0', removed_in='9.0')
+class CapReq:
+    """Obsolete representation of a CAP REQ.
 
-    :param str prefix: either ``=`` (must be enabled),
-                       ``-`` (must **not** be enabled),
-                       or empty string (desired but optional)
-    :param str plugin: the requesting plugin's name
-    :param failure: function to call if this capability request fails
-    :type failure: :term:`function`
-    :param str arg: optional capability value; the request will fail if
-                    the server's value is different
-    :param success: function to call if this capability request succeeds
-    :type success: :term:`function`
+    .. deprecated:: 8.0
 
-    The ``success`` and ``failure`` callbacks must accept two arguments:
-    ``bot`` (a :class:`~sopel.bot.Sopel` instance) and ``cap`` (the name of
-    the requested capability, as a string).
+        This class is deprecated. See :class:`sopel.plugin.capability` instead.
 
-    .. seealso::
-        For more information on how capability requests work, see the
-        documentation for :meth:`sopel.irc.AbstractBot.cap_req`.
+        This will be removed in Sopel 9.
+
     """
     def __init__(self, prefix, plugin, failure=None, arg=None, success=None):
         def nop(bot, cap):
             pass
-        # TODO at some point, reorder those args to be sane
         self.prefix = prefix
         self.plugin = plugin
         self.arg = arg
         self.failure = failure or nop
         self.success = success or nop
 
-    @property
-    @deprecated(
-        reason='use the `plugin` property instead',
-        version='7.1',
-        removed_in='8.0',
-    )
-    def module(self):
-        return self.plugin
 
-
-class MyInfo(collections.namedtuple('MyInfo', MYINFO_ARGS)):
+class MyInfo(NamedTuple):
     """Store client, servername, and version from ``RPL_MYINFO`` events.
 
     .. seealso::
@@ -112,5 +77,6 @@ class MyInfo(collections.namedtuple('MyInfo', MYINFO_ARGS)):
         https://modern.ircdocs.horse/#rplmyinfo-004
 
     """
-    # TODO: replace by a class using typing.NamedTuple (new in Python 3.5+)
-    # probably in Sopel 8.0 (due to drop most old Python versions)
+    client: str
+    servername: str
+    version: str

@@ -1,6 +1,7 @@
 """Tests for the ``sopel.plugins.rules`` module."""
-from __future__ import generator_stop
+from __future__ import annotations
 
+import datetime
 import re
 
 import pytest
@@ -464,6 +465,31 @@ def test_manager_has_action_command_aliases():
 
 
 # -----------------------------------------------------------------------------
+# tests for :class:`Manager`
+
+def test_rulemetrics():
+    now = datetime.datetime.now(datetime.timezone.utc)
+    time_window = datetime.timedelta(seconds=3600)
+    metrics = rules.RuleMetrics()
+
+    # never executed, so not limited
+    assert not metrics.is_limited(now)
+
+    # test limit while running
+    with metrics:
+        assert metrics.is_limited(now - time_window)
+        assert not metrics.is_limited(now + time_window)
+
+    # test limit after
+    assert metrics.is_limited(now - time_window)
+    assert not metrics.is_limited(now + time_window)
+
+    # test with NO LIMIT on the return value
+    metrics.set_return_value(rules.IGNORE_RATE_LIMIT)
+    assert not metrics.is_limited(now - time_window)
+    assert not metrics.is_limited(now + time_window)
+
+# -----------------------------------------------------------------------------
 # tests for :class:`Rule`
 
 
@@ -643,15 +669,26 @@ def test_rule_match_privmsg_action(mockbot):
     match = matches[0]
     assert match.group(0) == 'Hello, world'
 
-    rule = rules.Rule([regex], intents=[re.compile(r'ACTION')])
+    rule = rules.Rule([regex], ctcp=[re.compile(r'ACTION')])
     matches = list(rule.match(mockbot, pretrigger))
     assert len(matches) == 1, 'Exactly one match must be found'
 
     match = matches[0]
     assert match.group(0) == 'Hello, world'
 
-    rule = rules.Rule([regex], intents=[re.compile(r'VERSION')])
+    rule = rules.Rule([regex], ctcp=[re.compile(r'VERSION')])
     assert not list(rule.match(mockbot, pretrigger))
+
+
+def test_rule_match_privmsg_bot_tag(mockbot):
+    regex = re.compile(r'.*')
+    rule = rules.Rule([regex])
+
+    line = '@bot :TestBot!sopel@example.com PRIVMSG #sopel :Hi!'
+    pretrigger = trigger.PreTrigger(mockbot.nick, line)
+    assert not list(rule.match(mockbot, pretrigger)), (
+        'Line with `bot` tag must be ignored'
+    )
 
 
 def test_rule_match_privmsg_echo(mockbot):
@@ -668,6 +705,45 @@ def test_rule_match_privmsg_echo(mockbot):
 
     match = matches[0]
     assert match.group(0) == 'Hi!'
+
+
+@pytest.mark.parametrize(
+    'is_bot, allow_bots, is_echo, allow_echo, should_match',
+    [
+        (True, True, True, True, True),
+        (True, True, True, False, False),
+        (True, True, False, True, True),
+        (True, True, False, False, True),
+        (True, False, True, True, True),
+        (True, False, True, False, False),
+        (True, False, False, True, False),
+        (True, False, False, False, False),
+        (False, True, True, True, True),
+        (False, True, True, False, False),
+        (False, True, False, True, True),
+        (False, True, False, False, True),
+        (False, False, True, True, True),
+        (False, False, True, False, False),
+        (False, False, False, True, True),
+        (False, False, False, False, True),
+    ])
+def test_rule_match_privmsg_echo_and_bot_tag(
+    is_bot, allow_bots, is_echo, allow_echo, should_match, mockbot
+):
+    line = '{tags}:{nick}!user@example.com PRIVMSG #sopel :Hi!'.format(
+        tags='@bot ' if is_bot else '',
+        nick=mockbot.nick if is_echo else 'SomeUser',
+    )
+    pretrigger = trigger.PreTrigger(mockbot.nick, line)
+    regex = re.compile(r'.*')
+
+    rule = rules.Rule([regex], allow_bots=allow_bots, allow_echo=allow_echo)
+    matches = list(rule.match(mockbot, pretrigger))
+
+    if should_match:
+        assert len(matches) == 1, 'This combination should match the Rule'
+    else:
+        assert not matches, 'This combination should not match the Rule'
 
 
 def test_rule_match_join(mockbot):
@@ -698,19 +774,19 @@ def test_rule_match_event():
     assert rule.match_event('JOIN')
 
 
-def test_rule_match_intent():
+def test_rule_match_ctcp():
     regex = re.compile('.*')
 
     rule = rules.Rule([regex])
-    assert rule.match_intent(None)
+    assert rule.match_ctcp(None)
 
-    intents = [
+    ctcp = [
         re.compile('VERSION'),
     ]
-    rule = rules.Rule([regex], intents=intents)
-    assert not rule.match_intent(None)
-    assert rule.match_intent('VERSION')
-    assert not rule.match_intent('PING')
+    rule = rules.Rule([regex], ctcp=ctcp)
+    assert not rule.match_ctcp(None)
+    assert rule.match_ctcp('VERSION')
+    assert not rule.match_ctcp('PING')
 
 
 def test_rule_echo_message():
@@ -1028,11 +1104,18 @@ def test_kwargs_from_callable(mockbot):
     assert 'label' in kwargs
     assert 'priority' in kwargs
     assert 'events' in kwargs
-    assert 'intents' in kwargs
+    assert 'ctcp' in kwargs
     assert 'allow_echo' in kwargs
     assert 'threaded' in kwargs
     assert 'output_prefix' in kwargs
     assert 'unblockable' in kwargs
+    assert 'user_rate_limit' in kwargs
+    assert 'channel_rate_limit' in kwargs
+    assert 'global_rate_limit' in kwargs
+    assert 'user_rate_message' in kwargs
+    assert 'channel_rate_message' in kwargs
+    assert 'global_rate_message' in kwargs
+    assert 'default_rate_message' in kwargs
     assert 'usages' in kwargs
     assert 'tests' in kwargs
     assert 'doc' in kwargs
@@ -1041,11 +1124,18 @@ def test_kwargs_from_callable(mockbot):
     assert kwargs['label'] is None
     assert kwargs['priority'] == rules.PRIORITY_MEDIUM
     assert kwargs['events'] == ['PRIVMSG']
-    assert kwargs['intents'] == []
+    assert kwargs['ctcp'] == []
     assert kwargs['allow_echo'] is False
     assert kwargs['threaded'] is True
     assert kwargs['output_prefix'] == ''
     assert kwargs['unblockable'] is False
+    assert kwargs['user_rate_limit'] == 0
+    assert kwargs['channel_rate_limit'] == 0
+    assert kwargs['global_rate_limit'] == 0
+    assert kwargs['user_rate_message'] is None
+    assert kwargs['channel_rate_message'] is None
+    assert kwargs['global_rate_message'] is None
+    assert kwargs['default_rate_message'] is None
     assert kwargs['usages'] == tuple()
     assert kwargs['tests'] == tuple()
     assert kwargs['doc'] is None
@@ -1107,8 +1197,8 @@ def test_kwargs_from_callable_ctcp_intent(mockbot):
 
     # get kwargs
     kwargs = rules.Rule.kwargs_from_callable(handler)
-    assert 'intents' in kwargs
-    assert kwargs['intents'] == [re.compile(r'ACTION', re.IGNORECASE)]
+    assert 'ctcp' in kwargs
+    assert kwargs['ctcp'] == [re.compile(r'ACTION', re.IGNORECASE)]
 
 
 def test_kwargs_from_callable_allow_echo(mockbot):
@@ -1159,7 +1249,7 @@ def test_kwargs_from_callable_unblockable(mockbot):
 def test_kwargs_from_callable_rate_limit(mockbot):
     # prepare callable
     @plugin.rule(r'hello', r'hi', r'hey', r'hello|hi')
-    @plugin.rate(user=20, channel=30, server=40)
+    @plugin.rate(user=20, channel=30, server=40, message='Default message.')
     def handler(wrapped, trigger):
         wrapped.reply('Hi!')
 
@@ -1167,12 +1257,101 @@ def test_kwargs_from_callable_rate_limit(mockbot):
 
     # get kwargs
     kwargs = rules.Rule.kwargs_from_callable(handler)
-    assert 'rate_limit' in kwargs
+    assert 'user_rate_limit' in kwargs
     assert 'channel_rate_limit' in kwargs
     assert 'global_rate_limit' in kwargs
-    assert kwargs['rate_limit'] == 20
+    assert 'user_rate_message' in kwargs
+    assert 'channel_rate_message' in kwargs
+    assert 'global_rate_message' in kwargs
+    assert 'default_rate_message' in kwargs
+    assert kwargs['user_rate_limit'] == 20
     assert kwargs['channel_rate_limit'] == 30
     assert kwargs['global_rate_limit'] == 40
+    assert kwargs['user_rate_message'] is None
+    assert kwargs['channel_rate_message'] is None
+    assert kwargs['global_rate_message'] is None
+    assert kwargs['default_rate_message'] == 'Default message.'
+
+
+def test_kwargs_from_callable_rate_limit_user(mockbot):
+    # prepare callable
+    @plugin.rule(r'hello', r'hi', r'hey', r'hello|hi')
+    @plugin.rate_user(20, 'User message.')
+    def handler(wrapped, trigger):
+        wrapped.reply('Hi!')
+
+    loader.clean_callable(handler, mockbot.settings)
+
+    # get kwargs
+    kwargs = rules.Rule.kwargs_from_callable(handler)
+    assert 'user_rate_limit' in kwargs
+    assert 'channel_rate_limit' in kwargs
+    assert 'global_rate_limit' in kwargs
+    assert 'user_rate_message' in kwargs
+    assert 'channel_rate_message' in kwargs
+    assert 'global_rate_message' in kwargs
+    assert 'default_rate_message' in kwargs
+    assert kwargs['user_rate_limit'] == 20
+    assert kwargs['channel_rate_limit'] == 0
+    assert kwargs['global_rate_limit'] == 0
+    assert kwargs['user_rate_message'] == 'User message.'
+    assert kwargs['channel_rate_message'] is None
+    assert kwargs['global_rate_message'] is None
+    assert kwargs['default_rate_message'] is None
+
+
+def test_kwargs_from_callable_rate_limit_channel(mockbot):
+    # prepare callable
+    @plugin.rule(r'hello', r'hi', r'hey', r'hello|hi')
+    @plugin.rate_channel(20, 'Channel message.')
+    def handler(wrapped, trigger):
+        wrapped.reply('Hi!')
+
+    loader.clean_callable(handler, mockbot.settings)
+
+    # get kwargs
+    kwargs = rules.Rule.kwargs_from_callable(handler)
+    assert 'user_rate_limit' in kwargs
+    assert 'channel_rate_limit' in kwargs
+    assert 'global_rate_limit' in kwargs
+    assert 'user_rate_message' in kwargs
+    assert 'channel_rate_message' in kwargs
+    assert 'global_rate_message' in kwargs
+    assert 'default_rate_message' in kwargs
+    assert kwargs['user_rate_limit'] == 0
+    assert kwargs['channel_rate_limit'] == 20
+    assert kwargs['global_rate_limit'] == 0
+    assert kwargs['user_rate_message'] is None
+    assert kwargs['channel_rate_message'] == 'Channel message.'
+    assert kwargs['global_rate_message'] is None
+    assert kwargs['default_rate_message'] is None
+
+
+def test_kwargs_from_callable_rate_limit_server(mockbot):
+    # prepare callable
+    @plugin.rule(r'hello', r'hi', r'hey', r'hello|hi')
+    @plugin.rate_global(20, 'Server message.')
+    def handler(wrapped, trigger):
+        wrapped.reply('Hi!')
+
+    loader.clean_callable(handler, mockbot.settings)
+
+    # get kwargs
+    kwargs = rules.Rule.kwargs_from_callable(handler)
+    assert 'user_rate_limit' in kwargs
+    assert 'channel_rate_limit' in kwargs
+    assert 'global_rate_limit' in kwargs
+    assert 'user_rate_message' in kwargs
+    assert 'channel_rate_message' in kwargs
+    assert 'global_rate_message' in kwargs
+    assert 'default_rate_message' in kwargs
+    assert kwargs['user_rate_limit'] == 0
+    assert kwargs['channel_rate_limit'] == 0
+    assert kwargs['global_rate_limit'] == 20
+    assert kwargs['user_rate_message'] is None
+    assert kwargs['channel_rate_message'] is None
+    assert kwargs['global_rate_message'] == 'Server message.'
+    assert kwargs['default_rate_message'] is None
 
 
 def test_kwargs_from_callable_examples(mockbot):
@@ -1383,16 +1562,16 @@ def test_rule_rate_limit(mockbot, triggerfactory):
     rule = rules.Rule(
         [regex],
         handler=handler,
-        rate_limit=20,
+        user_rate_limit=20,
         global_rate_limit=20,
         channel_rate_limit=20,
     )
-    assert rule.is_rate_limited(mocktrigger.nick) is False
+    assert rule.is_user_rate_limited(mocktrigger.nick) is False
     assert rule.is_channel_rate_limited(mocktrigger.sender) is False
     assert rule.is_global_rate_limited() is False
 
     rule.execute(mockbot, mocktrigger)
-    assert rule.is_rate_limited(mocktrigger.nick) is True
+    assert rule.is_user_rate_limited(mocktrigger.nick) is True
     assert rule.is_channel_rate_limited(mocktrigger.sender) is True
     assert rule.is_global_rate_limited() is True
 
@@ -1409,16 +1588,16 @@ def test_rule_rate_limit_no_limit(mockbot, triggerfactory):
     rule = rules.Rule(
         [regex],
         handler=handler,
-        rate_limit=0,
+        user_rate_limit=0,
         global_rate_limit=0,
         channel_rate_limit=0,
     )
-    assert rule.is_rate_limited(mocktrigger.nick) is False
+    assert rule.is_user_rate_limited(mocktrigger.nick) is False
     assert rule.is_channel_rate_limited(mocktrigger.sender) is False
     assert rule.is_global_rate_limited() is False
 
     rule.execute(mockbot, mocktrigger)
-    assert rule.is_rate_limited(mocktrigger.nick) is False
+    assert rule.is_user_rate_limited(mocktrigger.nick) is False
     assert rule.is_channel_rate_limited(mocktrigger.sender) is False
     assert rule.is_global_rate_limited() is False
 
@@ -1435,18 +1614,103 @@ def test_rule_rate_limit_ignore_rate_limit(mockbot, triggerfactory):
     rule = rules.Rule(
         [regex],
         handler=handler,
-        rate_limit=20,
+        user_rate_limit=20,
         global_rate_limit=20,
         channel_rate_limit=20,
+        threaded=False,  # make sure there is no race-condition here
     )
-    assert rule.is_rate_limited(mocktrigger.nick) is False
+    assert rule.is_user_rate_limited(mocktrigger.nick) is False
     assert rule.is_channel_rate_limited(mocktrigger.sender) is False
     assert rule.is_global_rate_limited() is False
 
     rule.execute(mockbot, mocktrigger)
-    assert rule.is_rate_limited(mocktrigger.nick) is False
+    assert rule.is_user_rate_limited(mocktrigger.nick) is False
     assert rule.is_channel_rate_limited(mocktrigger.sender) is False
     assert rule.is_global_rate_limited() is False
+
+
+def test_rule_rate_limit_messages(mockbot, triggerfactory):
+    def handler(bot, trigger):
+        return 'hello'
+
+    regex = re.compile(r'.*')
+    rule = rules.Rule(
+        [regex],
+        handler=handler,
+        user_rate_limit=20,
+        global_rate_limit=20,
+        channel_rate_limit=20,
+        user_rate_message='User message: {nick}',
+        channel_rate_message='Channel message: {nick}/{channel}',
+        global_rate_message='Server message: {nick}',
+        default_rate_message='Default message: {nick}',
+    )
+    assert rule.user_rate_template == 'User message: {nick}'
+    assert rule.channel_rate_template == 'Channel message: {nick}/{channel}'
+    assert rule.global_rate_template == 'Server message: {nick}'
+
+
+def test_rule_rate_limit_messages_default(mockbot, triggerfactory):
+    def handler(bot, trigger):
+        return 'hello'
+
+    regex = re.compile(r'.*')
+    rule = rules.Rule(
+        [regex],
+        handler=handler,
+        user_rate_limit=20,
+        global_rate_limit=20,
+        channel_rate_limit=20,
+        default_rate_message='Default message',
+    )
+    assert rule.user_rate_template == 'Default message'
+    assert rule.channel_rate_template == 'Default message'
+    assert rule.global_rate_template == 'Default message'
+
+
+def test_rule_rate_limit_messages_default_mixed(mockbot, triggerfactory):
+    def handler(bot, trigger):
+        return 'hello'
+
+    regex = re.compile(r'.*')
+    rule = rules.Rule(
+        [regex],
+        handler=handler,
+        user_rate_limit=20,
+        global_rate_limit=20,
+        channel_rate_limit=20,
+        user_rate_message='User message.',
+        default_rate_message='The default.',
+    )
+    assert rule.user_rate_template == 'User message.'
+    assert rule.channel_rate_template == 'The default.'
+    assert rule.global_rate_template == 'The default.'
+
+    rule = rules.Rule(
+        [regex],
+        handler=handler,
+        user_rate_limit=20,
+        global_rate_limit=20,
+        channel_rate_limit=20,
+        channel_rate_message='Channel message.',
+        default_rate_message='The default.',
+    )
+    assert rule.user_rate_template == 'The default.'
+    assert rule.channel_rate_template == 'Channel message.'
+    assert rule.global_rate_template == 'The default.'
+
+    rule = rules.Rule(
+        [regex],
+        handler=handler,
+        user_rate_limit=20,
+        global_rate_limit=20,
+        channel_rate_limit=20,
+        global_rate_message='Server message.',
+        default_rate_message='The default.',
+    )
+    assert rule.user_rate_template == 'The default.'
+    assert rule.channel_rate_template == 'The default.'
+    assert rule.global_rate_template == 'Server message.'
 
 
 # -----------------------------------------------------------------------------
@@ -1841,10 +2105,7 @@ def test_command_from_callable_subcommand_aliases(mockbot):
     assert result.group(1) == 'reverse'
 
 
-def test_command_from_callable_regex_pattern(mockbot):
-    # TODO: this test must FAIL for Sopel 8.0
-    # Command name as regex pattern will be removed in Sopel 8.0
-
+def test_command_from_callable_escaped_regex_pattern(mockbot):
     # prepare callable
     @plugin.commands('main .*')
     def handler(wrapped, trigger):
@@ -1855,21 +2116,23 @@ def test_command_from_callable_regex_pattern(mockbot):
     # create rule from a cleaned callable
     rule = rules.Command.from_callable(mockbot.settings, handler)
 
-    # match on ".main anything"
+    # does not match on ".main anything"
     line = ':Foo!foo@example.com PRIVMSG #sopel :.main anything'
     pretrigger = trigger.PreTrigger(mockbot.nick, line)
     results = list(rule.match(mockbot, pretrigger))
 
+    assert not results, 'Regex commands are not allowed since Sopel 8.0'
+
+    # match on ".main .*"
+    line = ':Foo!foo@example.com PRIVMSG #sopel :.main .*'
+    pretrigger = trigger.PreTrigger(mockbot.nick, line)
+    results = list(rule.match(mockbot, pretrigger))
+
     assert len(results) == 1, (
-        'Exactly 1 command must match; MUST fail for Sopel 8.0')
+        'Command name must be escaped to get an exact match')
     result = results[0]
-    assert result.group(0) == '.main anything'
-    assert result.group(1) == 'main anything'
-    assert result.group(2) is None
-    assert result.group(3) is None
-    assert result.group(4) is None
-    assert result.group(5) is None
-    assert result.group(6) is None
+    assert result.group(0) == '.main .*'
+    assert result.group(1) == 'main .*'
 
 
 def test_command_from_callable_invalid(mockbot):
@@ -1883,21 +2146,6 @@ def test_command_from_callable_invalid(mockbot):
     # create rule from a cleaned callable
     with pytest.raises(RuntimeError):
         rules.Command.from_callable(mockbot.settings, handler)
-
-
-def test_command_escape_name():
-    rule = rules.Command('hello', r'\.', plugin='testplugin')
-
-    assert rule.escape_name('hello') == 'hello'
-    assert rule.escape_name('hello world') == r'hello\ world'
-    assert rule.escape_name(r'hello\ world') == r'hello\ world', (
-        'Valid pattern must not be escaped')
-    assert rule.escape_name(r'.*') == r'.*', (
-        'Valid pattern must not be escaped')
-    assert rule.escape_name(r'a[bc]d') == r'a[bc]d', (
-        'Valid pattern must not be escaped')
-    assert rule.escape_name(r'hello(') == r'hello\(', (
-        'Invalid pattern must be escaped')
 
 
 # -----------------------------------------------------------------------------
@@ -2160,10 +2408,6 @@ def test_nick_command_from_callable(mockbot):
 
 
 def test_nick_command_from_callable_regex_pattern(mockbot):
-    # TODO: this test must FAIL for Sopel 8.0
-    # Command name as regex pattern will be removed in Sopel 8.0
-
-    # prepare callable
     @plugin.nickname_commands('do .*')
     def handler(wrapped, trigger):
         wrapped.reply('Hi!')
@@ -2173,16 +2417,21 @@ def test_nick_command_from_callable_regex_pattern(mockbot):
     # create rule from a cleaned callable
     rule = rules.NickCommand.from_callable(mockbot.settings, handler)
 
-    # match on ".main anything"
+    # does not match on ".do anything"
     line = ':Foo!foo@example.com PRIVMSG #sopel :TestBot: do anything'
     pretrigger = trigger.PreTrigger(mockbot.nick, line)
     results = list(rule.match(mockbot, pretrigger))
 
-    assert len(results) == 1, (
-        'Exactly 1 command must match; MUST fail for Sopel 8.0')
+    assert not results, 'Regex commands are not allowed since Sopel 8.0'
+
+    # match on ".do .*"
+    line = ':Foo!foo@example.com PRIVMSG #sopel :TestBot: do .*'
+    pretrigger = trigger.PreTrigger(mockbot.nick, line)
+    results = list(rule.match(mockbot, pretrigger))
+    assert len(results) == 1, 'Exactly 1 command must match'
     result = results[0]
-    assert result.group(0) == 'TestBot: do anything'
-    assert result.group(1) == 'do anything'
+    assert result.group(0) == 'TestBot: do .*'
+    assert result.group(1) == 'do .*'
     assert result.group(2) is None
     assert result.group(3) is None
     assert result.group(4) is None
@@ -2270,19 +2519,19 @@ def test_action_command_has_alias(mockbot):
     assert not rule.has_alias('unknown')
 
 
-def test_action_command_match_intent(mockbot):
+def test_action_command_match_ctcp(mockbot):
     rule = rules.ActionCommand('hello')
-    assert rule.match_intent('ACTION')
-    assert not rule.match_intent('VERSION')
-    assert not rule.match_intent('PING')
+    assert rule.match_ctcp('ACTION')
+    assert not rule.match_ctcp('VERSION')
+    assert not rule.match_ctcp('PING')
 
-    intents = (re.compile(r'VERSION'), re.compile(r'SOURCE'))
-    rule = rules.ActionCommand('hello', intents=intents)
-    assert rule.match_intent('ACTION'), 'ActionCommand always match ACTION'
-    assert not rule.match_intent('VERSION'), (
-        'ActionCommand never match other intents')
-    assert not rule.match_intent('PING'), (
-        'ActionCommand never match other intents')
+    ctcp = (re.compile(r'VERSION'), re.compile(r'SOURCE'))
+    rule = rules.ActionCommand('hello', ctcp=ctcp)
+    assert rule.match_ctcp('ACTION'), 'ActionCommand always match ACTION'
+    assert not rule.match_ctcp('VERSION'), (
+        'ActionCommand never match other CTCP commands')
+    assert not rule.match_ctcp('PING'), (
+        'ActionCommand never match other CTCP commands')
 
 
 def test_action_command_from_callable_invalid(mockbot):
@@ -2365,9 +2614,6 @@ def test_action_command_from_callable(mockbot):
 
 
 def test_action_command_from_callable_regex_pattern(mockbot):
-    # TODO: this test must FAIL for Sopel 8.0
-    # Command name as regex pattern will be removed in Sopel 8.0
-
     # prepare callable
     @plugin.action_commands('do .*')
     def handler(wrapped, trigger):
@@ -2378,16 +2624,22 @@ def test_action_command_from_callable_regex_pattern(mockbot):
     # create rule from a cleaned callable
     rule = rules.ActionCommand.from_callable(mockbot.settings, handler)
 
-    # match on ".main anything"
+    # does not match on ".do anything"
     line = ':Foo!foo@example.com PRIVMSG #sopel :\x01ACTION do anything\x01'
     pretrigger = trigger.PreTrigger(mockbot.nick, line)
     results = list(rule.match(mockbot, pretrigger))
 
-    assert len(results) == 1, (
-        'Exactly 1 command must match; MUST fail for Sopel 8.0')
+    assert not results, 'Regex commands are not allowed since Sopel 8.0'
+
+    # match on ".do .*"
+    line = ':Foo!foo@example.com PRIVMSG #sopel :\x01ACTION do .*\x01'
+    pretrigger = trigger.PreTrigger(mockbot.nick, line)
+    results = list(rule.match(mockbot, pretrigger))
+
+    assert len(results) == 1, 'Exactly 1 command must match'
     result = results[0]
-    assert result.group(0) == 'do anything'
-    assert result.group(1) == 'do anything'
+    assert result.group(0) == 'do .*'
+    assert result.group(1) == 'do .*'
     assert result.group(2) is None
     assert result.group(3) is None
     assert result.group(4) is None
@@ -2679,7 +2931,7 @@ def test_url_callback_match_filter_intent(mockbot):
     assert match.group(0) == 'https://example.com/test'
     assert match.group(1) == 'test'
 
-    rule = rules.URLCallback([regex], intents=[re.compile(r'ACTION')])
+    rule = rules.URLCallback([regex], ctcp=[re.compile(r'ACTION')])
     matches = list(rule.match(mockbot, pretrigger))
     assert len(matches) == 1, 'Exactly one match must be found'
 
@@ -2687,7 +2939,7 @@ def test_url_callback_match_filter_intent(mockbot):
     assert match.group(0) == 'https://example.com/test'
     assert match.group(1) == 'test'
 
-    rule = rules.URLCallback([regex], intents=[re.compile(r'VERSION')])
+    rule = rules.URLCallback([regex], ctcp=[re.compile(r'VERSION')])
     assert not list(rule.match(mockbot, pretrigger))
 
 

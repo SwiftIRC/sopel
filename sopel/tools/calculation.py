@@ -1,10 +1,21 @@
-"""Tools to help safely do calculations from user input"""
-from __future__ import generator_stop
+"""Tools to help safely do calculations from user input
+
+.. versionadded:: 5.3
+.. note::
+
+    Most of this is internal machinery. :func:`eval_equation` is the "public"
+    part, used by Sopel's built-in ``calc`` plugin.
+
+"""
+from __future__ import annotations
 
 import ast
-import numbers
 import operator
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Callable, Optional
 
 __all__ = ['eval_equation']
 
@@ -22,16 +33,20 @@ class ExpressionEvaluator:
 
     class Error(Exception):
         """Internal exception type for :class:`ExpressionEvaluator`\\s."""
-        pass
 
-    def __init__(self, bin_ops=None, unary_ops=None):
+    def __init__(
+        self,
+        bin_ops: Optional[dict[type[ast.operator], Callable]] = None,
+        unary_ops: Optional[dict[type[ast.unaryop], Callable]] = None
+    ):
         self.binary_ops = bin_ops or {}
         self.unary_ops = unary_ops or {}
 
-    def __call__(self, expression_str, timeout=5.0):
+    def __call__(self, expression_str: str, timeout: float = 5.0):
         """Evaluate a Python expression and return the result.
 
-        :param str expression_str: the expression to evaluate
+        :param expression_str: the expression to evaluate
+        :param timeout: timeout for processing the expression, in seconds
         :raise SyntaxError: if the given ``expression_str`` is not a valid
                             Python statement
         :raise ExpressionEvaluator.Error: if the instance of
@@ -41,14 +56,12 @@ class ExpressionEvaluator:
         ast_expression = ast.parse(expression_str, mode='eval')
         return self._eval_node(ast_expression.body, time.time() + timeout)
 
-    def _eval_node(self, node, timeout):
+    def _eval_node(self, node: ast.AST, timeout: float):
         """Recursively evaluate the given :class:`ast.Node <ast.AST>`.
 
         :param node: the AST node to evaluate
-        :type node: :class:`ast.AST`
         :param timeout: how long the expression is allowed to process before
-                        timing out and failing
-        :type timeout: int or float
+                        timing out and failing, in seconds
         :raise ExpressionEvaluator.Error: if it can't handle the ``node``
 
         Uses :attr:`self.binary_ops` and :attr:`self.unary_ops` for the
@@ -57,11 +70,24 @@ class ExpressionEvaluator:
         A subclass could overwrite this to handle more nodes, calling it only
         for nodes it does not implement itself.
         """
-        if isinstance(node, ast.Num):
-            return node.n
+        if isinstance(node, ast.Constant):
+            if not isinstance(node.value, (int, float)):
+                raise ExpressionEvaluator.Error(
+                    "'{}' values are not supported".format(
+                        type(node.value).__name__,
+                    )
+                )
 
-        elif (isinstance(node, ast.BinOp) and
-                type(node.op) in self.binary_ops):
+            return node.value
+
+        elif isinstance(node, ast.BinOp):
+            if type(node.op) not in self.binary_ops:
+                raise ExpressionEvaluator.Error(
+                    "Unsupported binary operator '{}'".format(
+                        type(node.op).__name__,
+                    )
+                )
+
             left = self._eval_node(node.left, timeout)
             right = self._eval_node(node.right, timeout)
             if time.time() > timeout:
@@ -69,8 +95,14 @@ class ExpressionEvaluator:
                     "Time for evaluating expression ran out.")
             return self.binary_ops[type(node.op)](left, right)
 
-        elif (isinstance(node, ast.UnaryOp) and
-                type(node.op) in self.unary_ops):
+        elif isinstance(node, ast.UnaryOp):
+            if type(node.op) not in self.unary_ops:
+                raise ExpressionEvaluator.Error(
+                    "Unsupported unary operator '{}'".format(
+                        type(node.op).__name__,
+                    )
+                )
+
             operand = self._eval_node(node.operand, timeout)
             if time.time() > timeout:
                 raise ExpressionEvaluator.Error(
@@ -78,22 +110,21 @@ class ExpressionEvaluator:
             return self.unary_ops[type(node.op)](operand)
 
         raise ExpressionEvaluator.Error(
-            "Ast.Node '%s' not implemented." % (type(node).__name__,))
+            "Node type '{}' is not supported.".format(
+                type(node).__name__,
+            )
+        )
 
 
-def guarded_mul(left, right):
+def guarded_mul(left: float, right: float):
     """Multiply two values, guarding against overly large inputs.
 
     :param left: the left operand
-    :type left: int or float
     :param right: the right operand
-    :type right: int or float
     :raise ValueError: if the inputs are too large to handle safely
     """
     # Only handle ints because floats will overflow anyway.
-    if not isinstance(left, numbers.Integral):
-        pass
-    elif not isinstance(right, numbers.Integral):
+    if not isinstance(left, int) or not isinstance(right, int):
         pass
     elif left in (0, 1) or right in (0, 1):
         # Ignore trivial cases.
@@ -108,13 +139,11 @@ def guarded_mul(left, right):
     return operator.mul(left, right)
 
 
-def pow_complexity(num, exp):
+def pow_complexity(num: int, exp: int):
     """Estimate the worst case time :func:`pow` takes to calculate.
 
     :param num: base
-    :type num: int or float
     :param exp: exponent
-    :type exp: int or float
 
     This function is based on experimental data from the time it takes to
     calculate ``num**exp`` in 32-bit CPython 2.7.6 on an Intel Core i7-2670QM
@@ -176,19 +205,15 @@ def pow_complexity(num, exp):
         return exp ** 1.590 * num.bit_length() ** 1.73 / 36864057619.3
 
 
-def guarded_pow(num, exp):
+def guarded_pow(num: float, exp: float):
     """Raise a number to a power, guarding against overly large inputs.
 
     :param num: base
-    :type num: int or float
     :param exp: exponent
-    :type exp: int or float
     :raise ValueError: if the inputs are too large to handle safely
     """
     # Only handle ints because floats will overflow anyway.
-    if not isinstance(num, numbers.Integral):
-        pass
-    elif not isinstance(exp, numbers.Integral):
+    if not isinstance(num, int) or not isinstance(exp, int):
         pass
     elif pow_complexity(num, exp) < 0.5:
         # Value 0.5 is arbitrary and based on an estimated runtime of 0.5s
@@ -201,7 +226,14 @@ def guarded_pow(num, exp):
 
 
 class EquationEvaluator(ExpressionEvaluator):
-    __bin_ops = {
+    """Specific subclass of :class:`ExpressionEvaluator` for simple math
+
+    This presets the allowed operators to safeguard against user input that
+    could try to do things that will adversely affect the running bot, while
+    still letting users pass arbitrary mathematical expressions using the
+    available (mostly arithmetic) operators.
+    """
+    __bin_ops: dict[type[ast.operator], Callable] = {
         ast.Add: operator.add,
         ast.Sub: operator.sub,
         ast.Mult: guarded_mul,
@@ -211,7 +243,7 @@ class EquationEvaluator(ExpressionEvaluator):
         ast.FloorDiv: operator.floordiv,
         ast.BitXor: guarded_pow
     }
-    __unary_ops = {
+    __unary_ops: dict[type[ast.unaryop], Callable] = {
         ast.USub: operator.neg,
         ast.UAdd: operator.pos,
     }
@@ -223,8 +255,8 @@ class EquationEvaluator(ExpressionEvaluator):
             unary_ops=self.__unary_ops
         )
 
-    def __call__(self, expression_str):
-        result = ExpressionEvaluator.__call__(self, expression_str)
+    def __call__(self, expression_str: str, timeout: float = 5.0):
+        result = ExpressionEvaluator.__call__(self, expression_str, timeout)
 
         # This wrapper is here so additional sanity checks could be done
         # on the result of the eval, but currently none are done.

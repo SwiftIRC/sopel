@@ -2,7 +2,7 @@
 # Copyright 2019, Florian Strzelecki <florian.strzelecki@gmail.com>
 #
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
 
 class PluginError(Exception):
@@ -14,7 +14,7 @@ class PluginNotRegistered(PluginError):
     def __init__(self, name):
         message = 'Plugin "%s" not registered' % name
         self.plugin_name = name
-        super(PluginNotRegistered, self).__init__(message)
+        super().__init__(message)
 
 
 class PluginSettingsError(PluginError):

@@ -1,10 +1,11 @@
-from __future__ import generator_stop
+from __future__ import annotations
 
 import logging
 from logging.config import dictConfig
 import os
 
 from sopel import tools
+from sopel.lifecycle import deprecated
 
 
 class IrcLoggingHandler(logging.Handler):
@@ -18,7 +19,7 @@ class IrcLoggingHandler(logging.Handler):
     Implementation of a :class:`logging.Handler`.
     """
     def __init__(self, bot, level):
-        super(IrcLoggingHandler, self).__init__(level)
+        super().__init__(level)
         self._bot = bot
         self._channel = bot.settings.core.logging_channel
 
@@ -28,12 +29,12 @@ class IrcLoggingHandler(logging.Handler):
         :param record: the log record to output
         :type record: :class:`logging.LogRecord`
         """
-        if self._bot.backend is None or not self._bot.backend.is_connected():
-            # Don't emit logs when the bot is not connected.
+        if not self._bot.connection_registered:
+            # Don't emit logs to IRC when the bot is not connected & registered.
             return
 
         try:
-            msg = self.format(record)
+            msg = self.format(record).replace('\n', ' ')
             self._bot.say(msg, self._channel)
         except (KeyboardInterrupt, SystemExit):
             raise
@@ -52,7 +53,7 @@ class ChannelOutputFormatter(logging.Formatter):
     Implementation of a :class:`logging.Formatter`.
     """
     def __init__(self, fmt='[%(filename)s] %(message)s', datefmt=None):
-        super(ChannelOutputFormatter, self).__init__(fmt=fmt, datefmt=datefmt)
+        super().__init__(fmt=fmt, datefmt=datefmt)
 
     def formatException(self, exc_info):
         """Format the exception info as a string for output.
@@ -106,6 +107,11 @@ def setup_logging(settings):
                 'propagate': False,
                 'handlers': ['exceptionfile'],
             },
+            # asyncio logging
+            'asyncio': {
+                'level': 'DEBUG',
+                'handlers': ['console'],
+            },
         },
         'handlers': {
             # output on stderr
@@ -155,7 +161,7 @@ def setup_logging(settings):
     dictConfig(logging_config)
 
 
-@tools.deprecated(
+@deprecated(
     reason='use sopel.tools.get_logger instead',
     version='7.0',
     warning_in='8.0',

@@ -1,5 +1,7 @@
 """Tests for sopel.plugin decorators"""
-from __future__ import generator_stop
+from __future__ import annotations
+
+import pytest
 
 from sopel import plugin
 from sopel.tests import rawlist
@@ -11,6 +13,111 @@ owner = Bar
 nick = Sopel
 enable = coretasks
 """
+
+
+CAP_ACK_MESSAGE = 'CAP * ACK :away-notify'
+
+
+@pytest.fixture
+def cap_ack_wrapped(configfactory, botfactory, triggerfactory):
+    settings = configfactory('default.cfg', TMP_CONFIG)
+    return triggerfactory.wrapper(botfactory(settings), CAP_ACK_MESSAGE)
+
+
+def test_capability(cap_ack_wrapped):
+    handler = plugin.capability('away-notify')
+    assert isinstance(handler, plugin.capability)
+    assert handler.cap_req == ('away-notify',)
+
+    result = handler.callback(cap_ack_wrapped, True)
+    assert result == (True, None)
+
+
+def test_capability_as_string():
+    handler = plugin.capability('batch')
+    assert str(handler).startswith('<capability')
+    assert str(handler).endswith("'batch'>")
+
+    def _batch_callback(cap_req, bot, acknowledged):
+        ...
+
+    handler = plugin.capability('batch', handler=_batch_callback)
+
+    assert '(_batch_callback())' in str(handler)
+
+
+def test_capability_handler_define_once():
+    @plugin.capability('away-notify')
+    def handler(name, bot, acknowledged):
+        ...
+
+    assert isinstance(handler, plugin.capability)
+
+    # cannot redefine a handler
+    with pytest.raises(RuntimeError):
+        handler(lambda x, y, z: None)
+
+
+def test_capability_handler_continue(cap_ack_wrapped):
+    @plugin.capability('away-notify')
+    def handler(name, bot, acknowledged):
+        return plugin.CapabilityNegotiation.CONTINUE
+
+    assert isinstance(handler, plugin.capability)
+    assert handler.cap_req == ('away-notify',)
+    result = handler.callback(cap_ack_wrapped, True)
+    assert result == (False, plugin.CapabilityNegotiation.CONTINUE)
+
+
+def test_capability_handler_done(cap_ack_wrapped):
+    @plugin.capability('away-notify')
+    def handler(name, bot, acknowledged):
+        return plugin.CapabilityNegotiation.DONE
+
+    result = handler.callback(cap_ack_wrapped, True)
+    assert result == (True, plugin.CapabilityNegotiation.DONE)
+
+
+def test_capability_handler_raises(cap_ack_wrapped):
+    @plugin.capability('away-notify')
+    def handler(name, bot, acknowledged):
+        raise RuntimeError('Cap Error')
+
+    with pytest.raises(RuntimeError):
+        handler.callback(cap_ack_wrapped, True)
+
+
+def test_capability_too_long():
+    cap_reqs = ('example/cap',) * 41
+    assert len(' '.join(cap_reqs).encode('utf-8')) <= 500, 'Example too long'
+    plugin.capability(*cap_reqs)  # nothing happens
+
+    cap_reqs = ('example/cap',) * 42
+    assert len(' '.join(cap_reqs).encode('utf-8')) > 500, 'Example too short'
+
+    with pytest.raises(ValueError):
+        plugin.capability(*cap_reqs)
+
+
+def test_allow_bots():
+    # test decorator with parentheses
+    @plugin.allow_bots()
+    def mock(bot, trigger, match):
+        return True
+    assert mock.allow_bots is True
+
+    # test decorator without parentheses
+    @plugin.allow_bots
+    def mock(bot, trigger, match):
+        return True
+    assert mock.allow_bots is True
+
+    # test without decorator
+    def mock(bot, trigger, match):
+        return True
+    # on undecorated callables, the attr only exists after the loader loads them
+    # so this cannot `assert mock.allow_bots is False` here
+    assert not hasattr(mock, 'allow_bots')
 
 
 def test_find():
@@ -248,21 +355,98 @@ def test_ctcp():
     @plugin.ctcp('ACTION')
     def mock(bot, trigger, match):
         return True
-    assert mock.intents == ['ACTION']
+    assert mock.ctcp == ['ACTION']
 
 
 def test_ctcp_empty():
     @plugin.ctcp()
     def mock(bot, trigger, match):
         return True
-    assert mock.intents == ['ACTION']
+    assert mock.ctcp == ['ACTION']
 
 
 def test_ctcp_direct():
     @plugin.ctcp
     def mock(bot, trigger, match):
         return True
-    assert mock.intents == ['ACTION']
+    assert mock.ctcp == ['ACTION']
+
+
+def test_rate_user():
+    @plugin.rate_user(10)
+    def mock(bot, trigger):
+        return True
+    assert mock.user_rate == 10
+    assert mock.user_rate_message is None
+    assert not hasattr(mock, 'channel_rate')
+    assert not hasattr(mock, 'global_rate')
+    assert not hasattr(mock, 'default_rate_message')
+
+    @plugin.rate_user(20, 'User rate message.')
+    def mock(bot, trigger):
+        return True
+    assert mock.user_rate == 20
+    assert mock.user_rate_message == 'User rate message.'
+    assert not hasattr(mock, 'channel_rate')
+    assert not hasattr(mock, 'global_rate')
+    assert not hasattr(mock, 'default_rate_message')
+
+
+def test_rate_channel():
+    @plugin.rate_channel(10)
+    def mock(bot, trigger):
+        return True
+    assert mock.channel_rate == 10
+    assert mock.channel_rate_message is None
+    assert not hasattr(mock, 'user_rate')
+    assert not hasattr(mock, 'global_rate')
+    assert not hasattr(mock, 'default_rate_message')
+
+    @plugin.rate_channel(20, 'Channel rate message.')
+    def mock(bot, trigger):
+        return True
+    assert mock.channel_rate == 20
+    assert mock.channel_rate_message == 'Channel rate message.'
+    assert not hasattr(mock, 'user_rate')
+    assert not hasattr(mock, 'global_rate')
+    assert not hasattr(mock, 'default_rate_message')
+
+
+def test_rate_global():
+    @plugin.rate_global(10)
+    def mock(bot, trigger):
+        return True
+    assert mock.global_rate == 10
+    assert mock.global_rate_message is None
+    assert not hasattr(mock, 'user_rate')
+    assert not hasattr(mock, 'channel_rate')
+    assert not hasattr(mock, 'default_rate_message')
+
+    @plugin.rate_global(20, 'Server rate message.')
+    def mock(bot, trigger):
+        return True
+    assert mock.global_rate == 20
+    assert mock.global_rate_message == 'Server rate message.'
+    assert not hasattr(mock, 'user_rate')
+    assert not hasattr(mock, 'channel_rate')
+    assert not hasattr(mock, 'default_rate_message')
+
+
+def test_rate_combine_rate_decorators():
+    @plugin.rate(400, 500, 600, message='Last default rate message')
+    @plugin.rate_global(2, 'Server rate message')
+    @plugin.rate_channel(5, 'Channel rate message')
+    @plugin.rate_user(10, 'User rate message')
+    @plugin.rate(40, 50, 60, message='Initial default rate message')
+    def mock(bot, trigger):
+        return True
+    assert mock.user_rate == 10
+    assert mock.user_rate_message == 'User rate message'
+    assert mock.channel_rate == 5
+    assert mock.channel_rate_message == 'Channel rate message'
+    assert mock.global_rate == 2
+    assert mock.global_rate_message == 'Server rate message'
+    assert mock.default_rate_message == 'Last default rate message'
 
 
 BAN_MESSAGE = ':Foo!foo@example.com PRIVMSG #chan :.ban ExiClone'
@@ -340,19 +524,21 @@ def test_require_bot_privilege_private_message(configfactory,
     def mock(bot, trigger):
         return True
 
-    assert mock(bot, bot._trigger) is True
+    assert mock(bot, bot._trigger) is not True, (
+        'Callable requiring bot channel privilege must be ignored in private.')
 
     @plugin.command('ban')
     @plugin.require_bot_privilege(plugin.OP)
     def mock(bot, trigger):
         return True
 
-    assert mock(bot, bot._trigger) is True
+    assert mock(bot, bot._trigger) is not True, (
+        'Callable requiring bot channel privilege must be ignored in private.')
 
     @plugin.command('ban')
     @plugin.require_bot_privilege(plugin.OWNER)
     def mock(bot, trigger):
         return True
 
-    assert mock(bot, bot._trigger) is True, (
-        'There must not be privilege check for a private message.')
+    assert mock(bot, bot._trigger) is not True, (
+        'Callable requiring bot channel privilege must be ignored in private.')

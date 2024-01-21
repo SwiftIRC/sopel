@@ -10,9 +10,8 @@ from __future__ import generator_stop
 # All configuration values have a default; values that are commented out
 # serve to show the default.
 
-import sys, os
-parentdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.sys.path.insert(0,parentdir)
+from datetime import date
+
 from sopel import __version__
 
 # If extensions (or modules to document with autodoc) are in another directory,
@@ -23,19 +22,25 @@ from sopel import __version__
 # -- General configuration -----------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
-#needs_sphinx = '1.0'
+needs_sphinx = '7.1'  # todo: upgrade when Py3.8 reaches EOL
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
 extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.autosectionlabel',
+    'sphinx.ext.extlinks',
     'sphinx.ext.intersphinx',
     'sphinxcontrib.autoprogram',
+    'sphinx_rfcsection',
 ]
+extlinks = {
+    'issue': ('https://github.com/sopel-irc/sopel/issues/%s', '#%s'),
+    'pr': ('https://github.com/sopel-irc/sopel/pull/%s', '#%s'),
+}
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),
-    'sqlalchemy': ('https://docs.sqlalchemy.org/en/13/', None),
+    'sqlalchemy': ('https://docs.sqlalchemy.org/en/14/', None),
 }
 
 # Make Sphinx warn for references (methods, functions, etc.) it can't find
@@ -65,7 +70,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = 'Sopel'
-copyright = '2012-2021, Sopel contributors'
+copyright = '2012-{}, Sopel contributors'.format(date.today().year)
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -105,10 +110,27 @@ exclude_patterns = []
 #show_authors = False
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'sphinx'
+pygments_style = 'friendly'
+pygments_dark_style = 'monokai'
 
 # A list of ignored prefixes for module index sorting.
-#modindex_common_prefix = []
+modindex_common_prefix = ['sopel.']
+
+# If a signature’s length in characters exceeds the number set, each parameter
+# within the signature will be displayed on an individual logical line.
+maximum_signature_line_length = 80
+
+
+# -- Options for autodoc -------------------------------------------------------
+
+autodoc_type_aliases = {
+    'Casemapping': 'sopel.tools.identifiers.Casemapping',
+    'IdentifierFactory': 'sopel.tools.identifiers.IdentifierFactory',
+    'ModeTuple': 'sopel.irc.modes.ModeTuple',
+    'ModeDetails': 'sopel.irc.modes.ModeDetails',
+    'PrivilegeDetails': 'sopel.irc.modes.PrivilegeDetails',
+}
+autodoc_preserve_defaults = True
 
 
 # -- Options for HTML output ---------------------------------------------------

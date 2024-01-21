@@ -1,5 +1,8 @@
 """coretasks.py tests"""
-from __future__ import generator_stop
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import logging
 
 import pytest
 
@@ -62,6 +65,7 @@ def test_bot_mixed_mode_removal(mockbot, ircfactory):
     """
     irc = ircfactory(mockbot)
     irc.bot._isupport = isupport.ISupport(chanmodes=("b", "", "", "m", tuple()))
+    irc.bot.modeparser.chanmodes = irc.bot.isupport.CHANMODES
     irc.channel_joined('#test', ['Uvoice', 'Uop'])
 
     irc.mode_set('#test', '+qao', ['Uvoice', 'Uvoice', 'Uvoice'])
@@ -88,6 +92,7 @@ def test_bot_mixed_mode_types(mockbot, ircfactory):
     """
     irc = ircfactory(mockbot)
     irc.bot._isupport = isupport.ISupport(chanmodes=("be", "", "", "mn", tuple()))
+    irc.bot.modeparser.chanmodes = irc.bot.isupport.CHANMODES
     irc.channel_joined('#test', [
         'Uvoice', 'Uop', 'Uadmin', 'Uvoice2', 'Uop2', 'Uadmin2'])
     irc.mode_set('#test', '+amovn', ['Uadmin', 'Uop', 'Uvoice'])
@@ -111,6 +116,7 @@ def test_bot_unknown_mode(mockbot, ircfactory):
     """Ensure modes not in PREFIX or CHANMODES trigger a WHO."""
     irc = ircfactory(mockbot)
     irc.bot._isupport = isupport.ISupport(chanmodes=("b", "", "", "mnt", tuple()))
+    irc.bot.modeparser.chanmodes = irc.bot.isupport.CHANMODES
     irc.channel_joined("#test", ["Alex", "Bob", "Cheryl"])
     irc.mode_set("#test", "+te", ["Alex"])
 
@@ -124,6 +130,7 @@ def test_bot_unknown_priv_mode(mockbot, ircfactory):
     """Ensure modes in `mapping` but not PREFIX are treated as unknown."""
     irc = ircfactory(mockbot)
     irc.bot._isupport = isupport.ISupport(prefix={"o": "@", "v": "+"})
+    irc.bot.modeparser.privileges = set(irc.bot.isupport.PREFIX.keys())
     irc.channel_joined("#test", ["Alex", "Bob", "Cheryl"])
     irc.mode_set("#test", "+oh", ["Alex", "Bob"])
 
@@ -137,6 +144,7 @@ def test_bot_extra_mode_args(mockbot, ircfactory, caplog):
     """Test warning on extraneous MODE args."""
     irc = ircfactory(mockbot)
     irc.bot._isupport = isupport.ISupport(chanmodes=("b", "k", "l", "mnt", tuple()))
+    irc.bot.modeparser.chanmodes = irc.bot.isupport.CHANMODES
     irc.channel_joined("#test", ["Alex", "Bob", "Cheryl"])
 
     mode_msg = ":Sopel!bot@bot MODE #test +m nonsense"
@@ -159,6 +167,7 @@ def test_handle_rpl_channelmodeis(mockbot, ircfactory):
     ])
     irc = ircfactory(mockbot)
     irc.bot._isupport = isupport.ISupport(chanmodes=("b", "k", "l", "mnt", tuple()))
+    irc.bot.modeparser.chanmodes = irc.bot.isupport.CHANMODES
     irc.channel_joined("#test", ["Alex", "Bob", "Cheryl"])
     mockbot.on_message(rpl_channelmodeis)
 
@@ -172,6 +181,7 @@ def test_handle_rpl_channelmodeis_clear(mockbot, ircfactory):
     """Test RPL_CHANNELMODEIS events clearing previous modes"""
     irc = ircfactory(mockbot)
     irc.bot._isupport = isupport.ISupport(chanmodes=("b", "k", "l", "mnt", tuple()))
+    irc.bot.modeparser.chanmodes = irc.bot.isupport.CHANMODES
     irc.channel_joined("#test", ["Alex", "Bob", "Cheryl"])
 
     rpl_base = ":mercury.libera.chat 324 TestName #test {modes}"
@@ -212,7 +222,9 @@ def test_execute_perform_send_commands(mockbot):
     ]
 
     mockbot.config.core.commands_on_connect = commands
-    mockbot.connection_registered = True
+    # For testing, pretend connection already happened
+    mockbot.backend.connected = True
+    mockbot._connection_registered.set()
 
     coretasks._execute_perform(mockbot)
     assert mockbot.backend.message_sent == rawlist(*commands)
@@ -224,7 +236,9 @@ def test_execute_perform_replaces_nickname(mockbot):
     sent_command = 'MODE {} +Xxw'.format(mockbot.config.core.nick)
 
     mockbot.config.core.commands_on_connect = [command, ]
-    mockbot.connection_registered = True  # For testing, simulate connected
+    # For testing, pretend connection already happened
+    mockbot.backend.connected = True
+    mockbot._connection_registered.set()
 
     coretasks._execute_perform(mockbot)
     assert mockbot.backend.message_sent == rawlist(sent_command)
@@ -306,7 +320,78 @@ def test_handle_isupport(mockbot):
     assert 'CNOTICE' in mockbot.isupport
 
 
-@pytest.mark.parametrize('modes', ['', 'Rw'])
+def test_handle_isupport_casemapping(mockbot):
+    # Set bot's nick to something that needs casemapping
+    mockbot.settings.core.nick = 'Test[a]'
+    mockbot._nick = mockbot.make_identifier(mockbot.settings.core.nick)
+
+    # check default behavior (`rfc1459` casemapping)
+    assert mockbot.nick.lower() == 'test{a}'
+    assert str(mockbot.nick) == 'Test[a]'
+
+    # now the bot "connects" to a server using `CASEMAPPING=ascii`
+    mockbot.on_message(
+        ':irc.example.com 005 Sopel '
+        'CHANTYPES=# EXCEPTS INVEX CHANMODES=eIbq,k,flj,CFLMPQScgimnprstz '
+        'CHANLIMIT=#:120 PREFIX=(ov)@+ MAXLIST=bqeI:100 MODES=4 '
+        'NETWORK=example STATUSMSG=@+ CALLERID=g CASEMAPPING=ascii '
+        ':are supported by this server')
+
+    assert mockbot.nick.lower() == 'test[a]'
+
+
+def test_handle_isupport_casemapping_identifiermemory(mockbot):
+    # create a nick that needs casemapping
+    rfc1459 = 'Test[a]'
+
+    # create `SopelIdentifierMemory` w/bot's helper method and add the nick
+    memory = mockbot.make_identifier_memory()
+    memory[rfc1459] = rfc1459
+
+    # check default behavior (`rfc1459` casemapping)
+    assert memory['test{a}'] == rfc1459
+    assert memory['Test[a]'] == rfc1459
+
+    # now the bot "connects" to a server using `CASEMAPPING=ascii`
+    mockbot.on_message(
+        ':irc.example.com 005 Sopel '
+        'CHANTYPES=# EXCEPTS INVEX CHANMODES=eIbq,k,flj,CFLMPQScgimnprstz '
+        'CHANLIMIT=#:120 PREFIX=(ov)@+ MAXLIST=bqeI:100 MODES=4 '
+        'NETWORK=example STATUSMSG=@+ CALLERID=g CASEMAPPING=ascii '
+        ':are supported by this server')
+
+    # CASEMAPPING token change doesn't affect previously existing Identifiers...
+    assert memory['Test{a}'] == rfc1459
+    # ...so we have to create a new nick that will casemap differently now
+    ascii = 'Test[b]'
+    memory[ascii] = ascii
+    assert len(memory) == 2
+    assert memory['test[b]'] == ascii
+    assert 'test{b}' not in memory
+
+
+def test_handle_isupport_chantypes(mockbot):
+    # check default behavior (chantypes allows #, &, +, and !)
+    assert not mockbot.make_identifier('#channel').is_nick()
+    assert not mockbot.make_identifier('&channel').is_nick()
+    assert not mockbot.make_identifier('+channel').is_nick()
+    assert not mockbot.make_identifier('!channel').is_nick()
+
+    # now the bot "connects" to a server using `CHANTYPES=#`
+    mockbot.on_message(
+        ':irc.example.com 005 Sopel '
+        'CHANTYPES=# EXCEPTS INVEX CHANMODES=eIbq,k,flj,CFLMPQScgimnprstz '
+        'CHANLIMIT=#:120 PREFIX=(ov)@+ MAXLIST=bqeI:100 MODES=4 '
+        'NETWORK=example STATUSMSG=@+ CALLERID=g CASEMAPPING=ascii '
+        ':are supported by this server')
+
+    assert not mockbot.make_identifier('#channel').is_nick()
+    assert mockbot.make_identifier('&channel').is_nick()
+    assert mockbot.make_identifier('+channel').is_nick()
+    assert mockbot.make_identifier('!channel').is_nick()
+
+
+@pytest.mark.parametrize('modes', [None, '', 'Rw'])
 def test_handle_isupport_bot_mode(mockbot, modes):
     mockbot.config.core.modes = modes
 
@@ -405,7 +490,7 @@ def test_handle_isupport_uhnames(mockbot):
 
 def test_handle_isupport_namesx_with_multi_prefix(mockbot):
     # set multi-prefix
-    mockbot.server_capabilities['multi-prefix'] = None
+    mockbot.on_message(':irc.example.com CAP Sopel ACK :multi-prefix')
 
     # send NAMESX in ISUPPORT
     mockbot.on_message(
@@ -445,13 +530,6 @@ def test_handle_rpl_myinfo(mockbot):
     assert mockbot.myinfo.client == 'TestName'
     assert mockbot.myinfo.servername == 'irc.example.net'
     assert mockbot.myinfo.version == 'example-1.2.3'
-
-
-def test_sasl_plain_token_generation():
-    """Make sure SASL PLAIN tokens match the expected format."""
-    assert (
-        coretasks._make_sasl_plain_token('sopel', 'sasliscool') ==
-        'sopel\x00sopel\x00sasliscool')
 
 
 def test_recv_chghost(mockbot, ircfactory):
@@ -498,3 +576,102 @@ def test_recv_chghost_invalid(mockbot, ircfactory, caplog):
     assert 'extra arguments' in caplog.messages[0]
     assert 'insufficient arguments' in caplog.messages[1]
     assert 'insufficient arguments' in caplog.messages[2]
+
+
+def test_join_time(mockbot):
+    """Make sure channel.join_time is set from JOIN echo time tag"""
+    mockbot.on_message(
+        "@time=2021-01-01T12:00:00.015Z :TestBot!bot@bot JOIN #test * :bot"
+    )
+    assert mockbot.channels["#test"].join_time == datetime(
+        2021, 1, 1, 12, 0, 0, 15000, tzinfo=timezone.utc
+    )
+
+
+def test_handle_rpl_namreply_with_malformed_uhnames(mockbot, caplog):
+    """Make sure Sopel can cope with expected but missing hostmask in 353"""
+    caplog.set_level(logging.DEBUG)
+    mockbot.on_message(
+        ':somenet.behind.znc 005 Sopel '
+        'UHNAMES '
+        ':are supported by this server')
+    mockbot.on_message(
+        ':somenet.behind.znc 353 Sopel = #sopel '
+        ':correct!~right@alwa.ys incorrect')
+
+    assert len(caplog.messages) == 1
+    assert 'RPL_NAMREPLY item without a hostmask' in caplog.messages[0]
+
+
+def test_handle_who_reply(mockbot):
+    """Make sure Sopel correctly updates user info from WHO replies"""
+    # verify we start with no users/channels
+    assert len(mockbot.users) == 0
+    assert 'Internets' not in mockbot.users
+    assert len(mockbot.channels) == 0
+    assert '#channel' not in mockbot.channels
+
+    # add one user, who is Here
+    mockbot.on_message(
+        ':some.irc.network 352 Sopel #channel '
+        'internets services.irc.network * Internets Hr* '
+        ':0 Network Services Bot')
+    mockbot.on_message(
+        ':some.irc.network 315 Sopel #channel '
+        ':End of /WHO list.')
+
+    assert len(mockbot.users) == 1
+    assert 'Internets' in mockbot.users
+    assert mockbot.users['Internets'].nick == 'Internets'
+    assert mockbot.users['Internets'].user == 'internets'
+    assert mockbot.users['Internets'].host == 'services.irc.network'
+    assert mockbot.users['Internets'].realname == 'Network Services Bot'
+    assert mockbot.users['Internets'].away is False
+    assert mockbot.users['Internets'].is_bot is None
+
+    assert '#channel' in mockbot.channels
+    assert mockbot.channels['#channel']
+    assert len(mockbot.channels['#channel'].users) == 1
+    assert 'Internets' in mockbot.channels['#channel'].users
+    assert (
+        mockbot.users['Internets'] is mockbot.channels['#channel'].users['Internets']
+    )
+
+    # on next WHO, user has been marked as Gone
+    mockbot.on_message(
+        ':some.irc.network 352 Sopel #channel '
+        'internets services.irc.network * Internets Gr* '
+        ':0 Network Services Bot')
+    mockbot.on_message(
+        ':some.irc.network 315 Sopel #channel '
+        ':End of /WHO list.')
+
+    assert mockbot.users['Internets'].away is True
+    assert mockbot.users['Internets'].is_bot is None
+
+
+def test_handle_who_reply_botmode(mockbot):
+    """Make sure Sopel correctly tracks users' bot status from WHO replies"""
+    mockbot.on_message(
+        ':irc.example.com 005 Sopel '
+        'BOT=B '
+        ':are supported by this server')
+
+    # non-bot user
+    mockbot.on_message(
+        ':some.irc.network 352 Sopel #channel '
+        'human somewhere.in.the.world * E_R_Bradshaw H* '
+        ':0 E. R. Bradshaw')
+
+    assert mockbot.users['E_R_Bradshaw'].is_bot is False
+
+    # bot user
+    mockbot.on_message(
+        ':some.irc.network 352 Sopel #channel '
+        'internets services.irc.network * Internets HBr* '
+        ':0 Network Services Bot')
+    mockbot.on_message(
+        ':some.irc.network 315 Sopel #channel '
+        ':End of /WHO list.')
+
+    assert mockbot.users['Internets'].is_bot is True

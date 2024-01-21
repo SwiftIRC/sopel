@@ -20,59 +20,173 @@ dispatch function in :class:`sopel.bot.Sopel` and making it easier to maintain.
 # Copyright 2019, Florian Strzelecki <florian.strzelecki@gmail.com>
 #
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
 import base64
 import collections
-import datetime
+import copy
+from datetime import datetime, timedelta, timezone
 import functools
 import logging
 import re
 import time
+from typing import Callable, Optional, TYPE_CHECKING
 
-from sopel import loader, plugin
-from sopel.config import ConfigurationError
-from sopel.irc import isupport
-from sopel.irc.utils import CapReq, MyInfo
-from sopel.tools import events, Identifier, SopelMemory, target, web
+from sopel import config, plugin
+from sopel.irc import isupport, utils
+from sopel.tools import events, jobs, SopelMemory, target
+
+if TYPE_CHECKING:
+    from sopel.bot import Sopel, SopelWrapper
+    from sopel.tools import Identifier
+    from sopel.trigger import Trigger
 
 
 LOGGER = logging.getLogger(__name__)
 
-CORE_QUERYTYPE = '999'
+WHOX_QUERY = '%nuachrtf'
+"""List of WHOX flags coretasks requests."""
+WHOX_QUERYTYPE = '999'
 """WHOX querytype to indicate requests/responses from coretasks.
 
 Other plugins should use a different querytype.
 """
 
-batched_caps = {}
+MODE_PREFIX_PRIVILEGES = {
+    "v": plugin.VOICE,
+    "h": plugin.HALFOP,
+    "o": plugin.OP,
+    "a": plugin.ADMIN,
+    "q": plugin.OWNER,
+    "y": plugin.OPER,
+    "Y": plugin.OPER,
+}
 
 
-def setup(bot):
+def _handle_account_and_extjoin_capabilities(
+    cap_req: tuple[str, ...], bot: SopelWrapper, acknowledged: bool,
+) -> plugin.CapabilityNegotiation:
+    if acknowledged:
+        return plugin.CapabilityNegotiation.DONE
+
+    name = ', '.join(cap_req)
+    owner_account = bot.settings.core.owner_account
+    admin_accounts = bot.settings.core.admin_accounts
+
+    LOGGER.info(
+        'Server does not support "%s". '
+        'User account validation unavailable or limited.',
+        name,
+    )
+    if owner_account or admin_accounts:
+        LOGGER.warning(
+            'Owner or admin accounts are configured, but "%s" is not '
+            'supported by the server. This may cause unexpected behavior.',
+            name,
+        )
+
+    return plugin.CapabilityNegotiation.DONE
+
+
+def _handle_sasl_capability(
+    cap_req: tuple[str, ...], bot: SopelWrapper, acknowledged: bool,
+) -> plugin.CapabilityNegotiation:
+    # Manage CAP REQ :sasl
+    auth_method = bot.settings.core.auth_method
+    server_auth_method = bot.settings.core.server_auth_method
+    is_required = 'sasl' in (auth_method, server_auth_method)
+
+    if not is_required:
+        # not required: we are fine, available or not
+        return plugin.CapabilityNegotiation.DONE
+    elif not acknowledged:
+        # required but not available: error, we must stop here
+        LOGGER.error(
+            'SASL capability is not enabled; '
+            'cannot authenticate with SASL.',
+        )
+        return plugin.CapabilityNegotiation.ERROR
+
+    # Check SASL configuration (password is required for PLAIN/SCRAM)
+    password, mech = _get_sasl_pass_and_mech(bot)
+    if mech != "EXTERNAL" and not password:
+        raise config.ConfigurationError(
+            'SASL authentication required but no password available; '
+            'please check your configuration file.',
+        )
+
+    cap_info = bot.capabilities.get_capability_info('sasl')
+    cap_params = cap_info.params
+
+    available_mechs = cap_params.split(',') if cap_params else []
+
+    if available_mechs and mech not in available_mechs:
+        # Raise an error if configured to use an unsupported SASL mechanism,
+        # but only if the server actually advertised supported mechanisms,
+        # i.e. this network supports SASL 3.2
+
+        # SASL 3.1 failure is handled (when possible)
+        # by the sasl_mechs() function
+
+        # See https://github.com/sopel-irc/sopel/issues/1780 for background
+        raise config.ConfigurationError(
+            'SASL mechanism "{mech}" is not advertised by this server; '
+            'available mechanisms are: {available}.'.format(
+                mech=mech,
+                available=', '.join(available_mechs),
+            )
+        )
+
+    bot.write(('AUTHENTICATE', mech))
+
+    # If we want to do SASL, we have to wait before we can send CAP END. So if
+    # we are, wait on 903 (SASL successful) to send it.
+    return plugin.CapabilityNegotiation.CONTINUE
+
+
+CAP_ECHO_MESSAGE = plugin.capability('echo-message')
+CAP_MULTI_PREFIX = plugin.capability('multi-prefix')
+CAP_AWAY_NOTIFY = plugin.capability('away-notify')
+CAP_CHGHOST = plugin.capability('chghost')
+CAP_CAP_NOTIFY = plugin.capability('cap-notify')
+CAP_SERVER_TIME = plugin.capability('server-time')
+CAP_USERHOST_IN_NAMES = plugin.capability('userhost-in-names')
+CAP_MESSAGE_TAGS = plugin.capability('message-tags')
+CAP_ACCOUNT_NOTIFY = plugin.capability(
+    'account-notify', handler=_handle_account_and_extjoin_capabilities)
+CAP_EXTENDED_JOIN = plugin.capability(
+    'extended-join', handler=_handle_account_and_extjoin_capabilities)
+CAP_ACCOUNT_TAG = plugin.capability(
+    'account-tag', handler=_handle_account_and_extjoin_capabilities)
+CAP_SASL = plugin.capability('sasl', handler=_handle_sasl_capability)
+
+
+def setup(bot: Sopel):
     """Set up the coretasks plugin.
 
     The setup phase is used to activate the throttle feature to prevent a flood
     of JOIN commands when there are too many channels to join.
     """
+    bot.memory['retry_join'] = SopelMemory()
     bot.memory['join_events_queue'] = collections.deque()
 
     # Manage JOIN flood protection
     if bot.settings.core.throttle_join:
         wait_interval = max(bot.settings.core.throttle_wait, 1)
-
-        @plugin.interval(wait_interval)
-        @plugin.label('throttle_join')
-        def processing_job(bot):
-            _join_event_processing(bot)
-
-        loader.clean_callable(processing_job, bot.settings)
-        processing_job.plugin_name = 'coretasks'
-
-        bot.register_jobs([processing_job])
+        job = jobs.Job(
+            [wait_interval],
+            plugin='coretasks',
+            label='throttle_join',
+            handler=_join_event_processing,
+            threaded=True,
+            doc=None,
+        )
+        bot.scheduler.register(job)
 
 
 def shutdown(bot):
     """Clean up coretasks-related values in the bot's memory."""
+    bot.memory['retry_join'] = SopelMemory()
     try:
         bot.memory['join_events_queue'].clear()
     except KeyError:
@@ -134,7 +248,7 @@ def auth_after_register(bot):
 
     # nickserv-based auth method needs to check for current nick
     if auth_method == 'nickserv':
-        if bot.nick != bot.settings.core.nick:
+        if bot.nick != bot.make_identifier(bot.settings.core.nick):
             LOGGER.warning("Sending nickserv GHOST command.")
             bot.say(
                 'GHOST %s %s' % (bot.settings.core.nick, auth_password),
@@ -240,8 +354,36 @@ def startup(bot, trigger):
     if bot.connection_registered:
         return
 
+    LOGGER.info(
+        'Enabled client capabilities: %s',
+        ', '.join(bot.capabilities.enabled),
+    )
+
+    # nick shenanigans are serious business, but fortunately RPL_WELCOME
+    # includes the actual nick used by the server after truncation, removal
+    # of invalid characters, etc. so we can check for such shenanigans
+    if trigger.event == events.RPL_WELCOME:
+        if bot.nick != trigger.args[0]:
+            # setting modes below is just one of the things that won't work
+            # as expected if the conditions for running this block are met
+            privmsg = (
+                "Hi, I'm your bot, %s. The IRC server didn't assign me the "
+                "nick you configured. This can cause problems for me, and "
+                "make me do weird things. You'll probably want to stop me, "
+                "figure out why my nick isn't acceptable, and fix that before "
+                "starting me again." % bot.nick
+            )
+            debug_msg = (
+                "RPL_WELCOME indicated the server did not accept the bot's "
+                "configured nickname. Requested '%s'; got '%s'. This can "
+                "cause unexpected behavior. Please modify the configuration "
+                "and restart the bot." % (bot.nick, trigger.args[0])
+            )
+            LOGGER.critical(debug_msg)
+            bot.say(privmsg, bot.config.core.owner)
+
     # set flag
-    bot.connection_registered = True
+    bot._connection_registered.set()
 
     # handle auth method
     auth_after_register(bot)
@@ -254,12 +396,105 @@ def startup(bot, trigger):
             modes = '+' + modes
         bot.write(('MODE', bot.nick, modes))
 
-    # join channels
-    bot.memory['retry_join'] = SopelMemory()
+    # warn for insecure auth method if necessary
+    if (
+        not bot.config.core.owner_account and
+        bot.capabilities.is_enabled('account-tag') and
+        '@' not in bot.config.core.owner
+    ):
+        msg = (
+            "This network supports using network services to identify you as "
+            "my owner, rather than just matching your nickname. This is much "
+            "more secure. If you'd like to do this, make sure you're logged in "
+            "and reply with \"{}useserviceauth\""
+        ).format(bot.config.core.help_prefix)
+        bot.say(msg, bot.config.core.owner)
 
+    # execute custom commands
+    _execute_perform(bot)
+
+
+@plugin.event(events.RPL_ISUPPORT)
+@plugin.thread(False)
+@plugin.unblockable
+@plugin.rule('are supported by this server')
+@plugin.priority('medium')
+def handle_isupport(bot, trigger):
+    """Handle ``RPL_ISUPPORT`` events."""
+    # remember if certain actionable tokens are known to be supported,
+    # before parsing RPL_ISUPPORT
+    botmode_support = 'BOT' in bot.isupport
+    namesx_support = 'NAMESX' in bot.isupport
+    uhnames_support = 'UHNAMES' in bot.isupport
+    casemapping_support = 'CASEMAPPING' in bot.isupport
+    chantypes_support = 'CHANTYPES' in bot.isupport
+
+    # parse ISUPPORT message from server
+    parameters = {}
+    for arg in trigger.args:
+        try:
+            key, value = isupport.parse_parameter(arg)
+            parameters[key] = value
+        except ValueError:
+            # ignore malformed parameter: log a warning and continue
+            LOGGER.warning("Unable to parse ISUPPORT parameter: %r", arg)
+
+    bot._isupport = bot._isupport.apply(**parameters)
+
+    # update bot's mode parser
+    if 'CHANMODES' in bot.isupport:
+        bot.modeparser.chanmodes = bot.isupport.CHANMODES
+
+    if 'PREFIX' in bot.isupport:
+        bot.modeparser.privileges = set(bot.isupport.PREFIX.keys())
+
+    # rebuild nick when CASEMAPPING and/or CHANTYPES are set
+    if any((
+        # was CASEMAPPING support status updated?
+        not casemapping_support and 'CASEMAPPING' in bot.isupport,
+        # was CHANTYPES support status updated?
+        not chantypes_support and 'CHANTYPES' in bot.isupport,
+    )):
+        # these parameters change how the bot makes Identifiers
+        # since bot.nick is an Identifier, it must be rebuilt
+        bot.rebuild_nick()
+
+    # was BOT mode support status updated?
+    if not botmode_support and 'BOT' in bot.isupport:
+        # yes it was! set our mode unless the config overrides it
+        botmode = bot.isupport['BOT']
+        modes_setting = bot.config.core.modes
+
+        if not modes_setting or botmode not in bot.config.core.modes:
+            bot.write(('MODE', bot.nick, '+' + botmode))
+
+    # was NAMESX support status updated?
+    if not namesx_support and 'NAMESX' in bot.isupport:
+        # yes it was!
+        if not bot.capabilities.is_enabled('multi-prefix'):
+            # and the multi-prefix capability is not enabled
+            # so we can ask the server to use the NAMESX feature
+            bot.write(('PROTOCTL', 'NAMESX'))
+
+    # was UHNAMES support status updated?
+    if not uhnames_support and 'UHNAMES' in bot.isupport:
+        # yes it was!
+        if not bot.capabilities.is_enabled('userhost-in-names'):
+            # and the userhost-in-names capability is not enabled
+            # so we should ask for UHNAMES instead
+            bot.write(('PROTOCTL', 'UHNAMES'))
+
+
+@plugin.event(events.RPL_ENDOFMOTD, events.ERR_NOMOTD)
+@plugin.thread(False)
+@plugin.unblockable
+@plugin.priority('medium')
+def join_channels(bot, trigger):
+    # join channels
     channels = bot.config.core.channels
     if not channels:
         LOGGER.info("No initial channels to JOIN.")
+
     elif bot.config.core.throttle_join:
         throttle_rate = int(bot.config.core.throttle_join)
         throttle_wait = max(bot.config.core.throttle_wait, 1)
@@ -287,68 +522,6 @@ def startup(bot, trigger):
         for channel in bot.config.core.channels:
             bot.join(channel)
 
-    # warn for insecure auth method if necessary
-    if (not bot.config.core.owner_account and
-            'account-tag' in bot.enabled_capabilities and
-            '@' not in bot.config.core.owner):
-        msg = (
-            "This network supports using network services to identify you as "
-            "my owner, rather than just matching your nickname. This is much "
-            "more secure. If you'd like to do this, make sure you're logged in "
-            "and reply with \"{}useserviceauth\""
-        ).format(bot.config.core.help_prefix)
-        bot.say(msg, bot.config.core.owner)
-
-    # execute custom commands
-    _execute_perform(bot)
-
-
-@plugin.event(events.RPL_ISUPPORT)
-@plugin.thread(False)
-@plugin.unblockable
-@plugin.rule('are supported by this server')
-@plugin.priority('medium')
-def handle_isupport(bot, trigger):
-    """Handle ``RPL_ISUPPORT`` events."""
-    # remember if certain actionable tokens are known to be supported,
-    # before parsing RPL_ISUPPORT
-    botmode_support = 'BOT' in bot.isupport
-    namesx_support = 'NAMESX' in bot.isupport
-    uhnames_support = 'UHNAMES' in bot.isupport
-
-    # parse ISUPPORT message from server
-    parameters = {}
-    for arg in trigger.args:
-        try:
-            key, value = isupport.parse_parameter(arg)
-            parameters[key] = value
-        except ValueError:
-            # ignore malformed parameter: log a warning and continue
-            LOGGER.warning("Unable to parse ISUPPORT parameter: %r", arg)
-
-    bot._isupport = bot._isupport.apply(**parameters)
-
-    # was BOT mode support status updated?
-    if not botmode_support and 'BOT' in bot.isupport:
-        # yes it was! set our mode unless the config overrides it
-        botmode = bot.isupport['BOT']
-        if botmode not in bot.config.core.modes:
-            bot.write(('MODE', bot.nick, '+' + botmode))
-    # was NAMESX support status updated?
-    if not namesx_support and 'NAMESX' in bot.isupport:
-        # yes it was!
-        if 'multi-prefix' not in bot.server_capabilities:
-            # and the server doesn't have the multi-prefix capability
-            # so we can ask the server to use the NAMESX feature
-            bot.write(('PROTOCTL', 'NAMESX'))
-    # was UHNAMES support status updated?
-    if not uhnames_support and 'UHNAMES' in bot.isupport:
-        # yes it was!
-        if 'userhost-in-names' not in bot.server_capabilities:
-            # and the server doesn't have the userhost-in-names capability
-            # so we should ask for UHNAMES instead
-            bot.write(('PROTOCTL', 'UHNAMES'))
-
 
 @plugin.event(events.RPL_MYINFO)
 @plugin.thread(False)
@@ -358,7 +531,7 @@ def parse_reply_myinfo(bot, trigger):
     """Handle ``RPL_MYINFO`` events."""
     # keep <client> <servername> <version> only
     # the trailing parameters (mode types) should be read from ISUPPORT
-    bot._myinfo = MyInfo(*trigger.args[0:3])
+    bot._myinfo = utils.MyInfo(*trigger.args[0:3])
 
     LOGGER.info(
         "Received RPL_MYINFO from server: %s, %s, %s",
@@ -382,7 +555,7 @@ def enable_service_auth(bot, trigger):
     """
     if bot.config.core.owner_account:
         return
-    if 'account-tag' not in bot.enabled_capabilities:
+    if not bot.capabilities.is_enabled('account-tag'):
         bot.say('This server does not fully support services auth, so this '
                 'command is not available.')
         return
@@ -443,9 +616,12 @@ def handle_names(bot, trigger):
     channels = re.search(r'(#\S*)', trigger.raw)
     if not channels:
         return
-    channel = Identifier(channels.group(1))
+    channel = bot.make_identifier(channels.group(1))
     if channel not in bot.channels:
-        bot.channels[channel] = target.Channel(channel)
+        bot.channels[channel] = target.Channel(
+            channel,
+            identifier_factory=bot.make_identifier,
+        )
 
     # This could probably be made flexible in the future, but I don't think
     # it'd be worth it.
@@ -461,22 +637,31 @@ def handle_names(bot, trigger):
     }
 
     uhnames = 'UHNAMES' in bot.isupport
-    userhost_in_names = 'userhost-in-names' in bot.enabled_capabilities
+    userhost_in_names = bot.capabilities.is_enabled('userhost-in-names')
 
     names = trigger.split()
     for name in names:
+        username = hostname = None
+
         if uhnames or userhost_in_names:
-            name, mask = name.rsplit('!', 1)
-            username, hostname = mask.split('@', 1)
-        else:
-            username = hostname = None
+            try:
+                name, mask = name.rsplit('!', 1)
+                username, hostname = mask.split('@', 1)
+            except ValueError:
+                # server advertised either UHNAMES or userhost-in-names, but
+                # isn't sending the hostmask with all listed nicks
+                # It's probably ZNC. https://github.com/znc/znc/issues/1224
+                LOGGER.debug(
+                    '%s is enabled, but still got RPL_NAMREPLY item without a hostmask. '
+                    'IRC server/bouncer is not spec compliant.',
+                    'UHNAMES' if uhnames else 'userhost-in-names')
 
         priv = 0
         for prefix, value in mapping.items():
             if prefix in name:
                 priv = priv | value
 
-        nick = Identifier(name.lstrip(''.join(mapping.keys())))
+        nick = bot.make_identifier(name.lstrip(''.join(mapping.keys())))
         user = bot.users.get(nick)
         if user is None:
             # The username/hostname will be included in a NAMES reply only if
@@ -508,8 +693,19 @@ def initial_modes(bot, trigger):
 
 
 def _parse_modes(bot, args, clear=False):
-    """Parse MODE message and apply changes to internal state."""
-    channel_name = Identifier(args[0])
+    """Parse MODE message and apply changes to internal state.
+
+    Sopel, by default, doesn't know how to parse other types than A, B, C, and
+    D, and only a preset of privileges.
+
+    .. seealso::
+
+        Parsing mode messages can be tricky and complicated to understand. In
+        any case it is better to read the IRC specifications about channel
+        modes at https://modern.ircdocs.horse/#channel-mode
+
+    """
+    channel_name = bot.make_identifier(args[0])
     if channel_name.is_nick():
         # We don't do anything with user modes
         LOGGER.debug("Ignoring user modes: %r", args)
@@ -527,95 +723,76 @@ def _parse_modes(bot, args, clear=False):
         LOGGER.debug(
             "The server sent a possibly malformed MODE message: %r", args)
 
-    modestring = args[1]
-    params = args[2:]
+    # parse the modestring with the parameters
+    modeinfo = bot.modeparser.parse(args[1], tuple(args[2:]))
 
-    mapping = {
-        "v": plugin.VOICE,
-        "h": plugin.HALFOP,
-        "o": plugin.OP,
-        "a": plugin.ADMIN,
-        "q": plugin.OWNER,
-        "y": plugin.OPER,
-        "Y": plugin.OPER,
-    }
+    # set, unset, or update channel's modes based on the mode type
+    # modeinfo.modes contains only the valid parsed modes
+    # coretask can handle type A, B, C, and D only
+    modes = {} if clear else copy.deepcopy(channel.modes)
+    for letter, mode, is_added, param in modeinfo.modes:
+        if letter == 'A':
+            # type A is a multi-value mode and always requires a parameter
+            if mode not in modes:
+                modes[mode] = set()
+            if is_added:
+                modes[mode].add(param)
+            elif param in modes[mode]:
+                modes[mode].remove(param)
+                # remove mode if empty
+                if not modes[mode]:
+                    modes.pop(mode)
+        elif letter == 'B':
+            # type B is a single-value mode and always requires a parameter
+            if is_added:
+                modes[mode] = param
+            elif mode in modes:
+                modes.pop(mode)
+        elif letter == 'C':
+            # type C is a single-value mode and requires a parameter when added
+            if is_added:
+                modes[mode] = param
+            elif mode in modes:
+                modes.pop(mode)
+        elif letter == 'D':
+            # type D is a flag (True or False) and doesn't have a parameter
+            if is_added:
+                modes[mode] = True
+            elif mode in modes:
+                modes.pop(mode)
 
-    modes = {}
-    if not clear:
-        # Work on a copy for some thread safety
-        modes.update(channel.modes)
+    # atomic change of channel's modes
+    channel.modes = modes
 
-    # Process modes
-    sign = ""
-    param_idx = 0
-    chanmodes = bot.isupport.CHANMODES
-    for char in modestring:
-        # Are we setting or unsetting
-        if char in "+-":
-            sign = char
-            continue
-
-        if char in chanmodes["A"]:
-            # Type A (beI, etc) have a nick or address param to add/remove
-            if char not in modes:
-                modes[char] = set()
-            if sign == "+":
-                modes[char].add(params[param_idx])
-            elif params[param_idx] in modes[char]:
-                modes[char].remove(params[param_idx])
-            param_idx += 1
-        elif char in chanmodes["B"]:
-            # Type B (k, etc) always have a param
-            if sign == "+":
-                modes[char] = params[param_idx]
-            elif char in modes:
-                modes.pop(char)
-            param_idx += 1
-        elif char in chanmodes["C"]:
-            # Type C (l, etc) have a param only when setting
-            if sign == "+":
-                modes[char] = params[param_idx]
-                param_idx += 1
-            elif char in modes:
-                modes.pop(char)
-        elif char in chanmodes["D"]:
-            # Type D (aciLmMnOpqrRst, etc) have no params
-            if sign == "+":
-                modes[char] = True
-            elif char in modes:
-                modes.pop(char)
-        elif char in mapping and (
-            "PREFIX" not in bot.isupport or char in bot.isupport.PREFIX
-        ):
-            # User privs modes, always have a param
-            nick = Identifier(params[param_idx])
-            priv = channel.privileges.get(nick, 0)
-            value = mapping.get(char)
-            if value is not None:
-                if sign == "+":
-                    priv = priv | value
-                else:
-                    priv = priv & ~value
-                channel.privileges[nick] = priv
-            param_idx += 1
+    # update user privileges in channel
+    # modeinfo.privileges contains only the valid parsed privileges
+    for privilege, is_added, param in modeinfo.privileges:
+        # User privs modes, always have a param
+        nick = bot.make_identifier(param)
+        priv = channel.privileges.get(nick, 0)
+        value = MODE_PREFIX_PRIVILEGES[privilege]
+        if is_added:
+            priv = priv | value
         else:
-            # Might be in a mode block past A/B/C/D, but we don't speak those.
-            # Send a WHO to ensure no user priv modes we're skipping are lost.
-            LOGGER.warning(
-                "Unknown MODE message, sending WHO. Message was: %r",
-                args,
-            )
-            _send_who(bot, channel_name)
-            return
+            priv = priv & ~value
+        channel.privileges[nick] = priv
 
-    if param_idx != len(params):
+    # log ignored modes (modes Sopel doesn't know how to handle)
+    if modeinfo.ignored_modes:
+        LOGGER.warning(
+            "Unknown MODE message, sending WHO. Message was: %r",
+            args,
+        )
+        # send a WHO message to ensure we didn't miss anything
+        _send_who(bot, channel_name)
+
+    # log leftover parameters (too many arguments)
+    if modeinfo.leftover_params:
         LOGGER.warning(
             "Too many arguments received for MODE: args=%r chanmodes=%r",
             args,
-            chanmodes,
+            bot.modeparser.chanmodes,
         )
-
-    channel.modes = modes
 
     LOGGER.info("Updated mode for channel: %s", channel.name)
     LOGGER.debug("Channel %r mode: %r", str(channel.name), channel.modes)
@@ -628,23 +805,36 @@ def _parse_modes(bot, args, clear=False):
 def track_nicks(bot, trigger):
     """Track nickname changes and maintain our chanops list accordingly."""
     old = trigger.nick
-    new = Identifier(trigger)
+    new = bot.make_identifier(trigger)
 
     # Give debug message, and PM the owner, if the bot's own nick changes.
     if old == bot.nick and new != bot.nick:
-        privmsg = (
-            "Hi, I'm your bot, %s. Something has made my nick change. This "
-            "can cause some problems for me, and make me do weird things. "
-            "You'll probably want to restart me, and figure out what made "
-            "that happen so you can stop it happening again. (Usually, it "
-            "means you tried to give me a nick that's protected by NickServ.)"
-        ) % bot.nick
-        debug_msg = (
-            "Nick changed by server. This can cause unexpected behavior. "
-            "Please restart the bot."
-        )
-        LOGGER.critical(debug_msg)
-        bot.say(privmsg, bot.config.core.owner)
+        # Is this the original nick being regained?
+        # e.g. by ZNC's keepnick module running in front of Sopel
+        if old != bot.config.core.nick and new == bot.config.core.nick:
+            LOGGER.info(
+                "Regained configured nick. Restarting is still recommended.")
+        else:
+            privmsg = (
+                "Hi, I'm your bot, %s. Something has made my nick change. This "
+                "can cause some problems for me, and make me do weird things. "
+                "You'll probably want to restart me, and figure out what made "
+                "that happen so you can stop it happening again. (Usually, it "
+                "means you tried to give me a nick that's protected by NickServ.)"
+            ) % bot.config.core.nick
+            debug_msg = (
+                "Nick changed by server. This can cause unexpected behavior. "
+                "Please restart the bot."
+            )
+            LOGGER.critical(debug_msg)
+            bot.say(privmsg, bot.config.core.owner)
+
+        # Always update bot.nick anyway so Sopel doesn't lose its self-identity.
+        # This should cut down the number of "weird things" that happen while
+        # the active nick doesn't match the config, but it's not a substitute
+        # for regaining the expected nickname.
+        LOGGER.info("Updating bot.nick property with server-changed nick.")
+        bot._nick = new
         return
 
     for channel in bot.channels.values():
@@ -652,7 +842,7 @@ def track_nicks(bot, trigger):
     if old in bot.users:
         bot.users[new] = bot.users.pop(old)
 
-    LOGGER.info("User named %r is now known as %r.", old, str(new))
+    LOGGER.info("User named %r is now known as %r.", str(old), str(new))
 
 
 @plugin.rule('(.*)')
@@ -674,7 +864,7 @@ def track_part(bot, trigger):
 @plugin.priority('medium')
 def track_kick(bot, trigger):
     """Track users kicked from channels."""
-    nick = Identifier(trigger.args[1])
+    nick = bot.make_identifier(trigger.args[1])
     channel = trigger.sender
     _remove_from_channel(bot, nick, channel)
     LOGGER.info(
@@ -704,33 +894,36 @@ def _remove_from_channel(bot, nick, channel):
                 bot.users.pop(nick, None)
 
 
-def _send_who(bot, channel):
+def _send_who(bot, mask):
     if 'WHOX' in bot.isupport:
         # WHOX syntax, see http://faerion.sourceforge.net/doc/irc/whox.var
-        # Needed for accounts in WHO replies. The `CORE_QUERYTYPE` parameter
+        # Needed for accounts in WHO replies. The `WHOX_QUERYTYPE` parameter
         # for WHO is used to identify the reply from the server and confirm
         # that it has the requested format. WHO replies with different
         # querytypes in the response were initiated elsewhere and will be
         # ignored.
-        bot.write(['WHO', channel, 'a%nuachtf,' + CORE_QUERYTYPE])
+        bot.write(['WHO', mask, '{},{}'.format(WHOX_QUERY, WHOX_QUERYTYPE)])
     else:
         # We might be on an old network, but we still care about keeping our
         # user list updated
-        bot.write(['WHO', channel])
-    bot.channels[Identifier(channel)].last_who = datetime.datetime.utcnow()
+        bot.write(['WHO', mask])
+
+    target_id = bot.make_identifier(mask)
+    if not target_id.is_nick():
+        bot.channels[target_id].last_who = datetime.now(timezone.utc)
 
 
 @plugin.interval(30)
 def _periodic_send_who(bot):
     """Periodically send a WHO request to keep user information up-to-date."""
-    if 'away-notify' in bot.enabled_capabilities:
+    if bot.capabilities.is_enabled('away-notify'):
         # WHO not needed to update 'away' status
         return
 
-    # Loops through the channels to find the one that has the longest time since the last WHO
-    # request, and issues a WHO request only if the last request for the channel was more than
+    # Loop through the channels to find the one that has the longest time since the last WHO
+    # request, and issue a WHO request only if the last request for the channel was more than
     # 120 seconds ago.
-    who_trigger_time = datetime.datetime.utcnow() - datetime.timedelta(seconds=120)
+    who_trigger_time = datetime.now(timezone.utc) - timedelta(seconds=120)
     selected_channel = None
     for channel_name, channel in bot.channels.items():
         if channel.last_who is None:
@@ -759,14 +952,21 @@ def track_join(bot, trigger):
     to know more about said user (privileges, modes, etc.).
     """
     channel = trigger.sender
+    new_channel = channel not in bot.channels
+    self_join = trigger.nick == bot.nick
+    new_user = trigger.nick not in bot.users
 
     # is it a new channel?
-    if channel not in bot.channels:
-        bot.channels[channel] = target.Channel(channel)
+    if new_channel:
+        bot.channels[channel] = target.Channel(
+            channel,
+            identifier_factory=bot.make_identifier,
+        )
 
     # did *we* just join?
-    if trigger.nick == bot.nick:
+    if self_join:
         LOGGER.info("Channel joined: %s", channel)
+        bot.channels[channel].join_time = trigger.time
         if bot.settings.core.throttle_join:
             LOGGER.debug("JOIN event added to queue for channel: %s", channel)
             bot.memory['join_events_queue'].append(channel)
@@ -780,16 +980,22 @@ def track_join(bot, trigger):
             str(channel), trigger.nick)
 
     # set initial values
-    user = bot.users.get(trigger.nick)
-    if user is None:
+    if new_user:
         user = target.User(trigger.nick, trigger.user, trigger.host)
         bot.users[trigger.nick] = user
+    else:
+        user = bot.users.get(trigger.nick)
     bot.channels[channel].add_user(user)
 
     if len(trigger.args) > 1 and trigger.args[1] != '*' and (
-            'account-notify' in bot.enabled_capabilities and
-            'extended-join' in bot.enabled_capabilities):
+        bot.capabilities.is_enabled('account-notify') and
+        bot.capabilities.is_enabled('extended-join')
+    ):
         user.account = trigger.args[1]
+
+    if new_user and not new_channel:
+        # send WHO to populate new user's realname etc.
+        _send_who(bot, trigger.nick)
 
 
 @plugin.event('QUIT')
@@ -804,180 +1010,151 @@ def track_quit(bot, trigger):
 
     LOGGER.info("User quit: %s", trigger.nick)
 
-    if trigger.nick == bot.settings.core.nick and trigger.nick != bot.nick:
+    configured_nick = bot.make_identifier(bot.settings.core.nick)
+    if trigger.nick == configured_nick and trigger.nick != bot.nick:
         # old nick is now available, let's change nick again
         bot.change_current_nick(bot.settings.core.nick)
         auth_after_register(bot)
+
+
+def _receive_cap_ls_reply(bot: SopelWrapper, trigger: Trigger) -> None:
+    if not bot.capabilities.handle_ls(bot, trigger):
+        # multi-line, we must wait for more
+        return
+
+    if not bot.request_capabilities():
+        # Negotiation end because there is nothing to request
+        LOGGER.info('No capability negotiation.')
+        bot.write(('CAP', 'END'))
+
+
+def _handle_cap_acknowledgement(
+    bot: SopelWrapper,
+    cap_req: tuple[str, ...],
+    results: list[tuple[bool, Optional[plugin.CapabilityNegotiation]]],
+    was_completed: bool,
+) -> None:
+    if any(
+        callback_result[1] == plugin.CapabilityNegotiation.ERROR
+        for callback_result in results
+    ):
+        # error: a plugin needs something and the bot cannot function properly
+        LOGGER.error(
+            'Capability negotiation failed for request: "%s"',
+            ' '.join(cap_req),
+        )
+        bot.write(('CAP', 'END'))  # close negotiation now
+        bot.quit('Error negotiating capabilities.')
+
+    if not was_completed and bot.cap_requests.is_complete:
+        # success: negotiation is complete and wasn't already
+        LOGGER.info('Capability negotiation ended successfuly.')
+        bot.write(('CAP', 'END'))  # close negotiation now
+
+
+def _receive_cap_ack(bot: SopelWrapper, trigger: Trigger) -> None:
+    was_completed = bot.cap_requests.is_complete
+    cap_ack: tuple[str, ...] = bot.capabilities.handle_ack(bot, trigger)
+
+    try:
+        result: Optional[
+            list[tuple[bool, Optional[plugin.CapabilityNegotiation]]]
+        ] = bot.cap_requests.acknowledge(bot, cap_ack)
+    except config.ConfigurationError as error:
+        LOGGER.error(
+            'Configuration error on ACK capability "%s": %s',
+            ', '.join(cap_ack),
+            error,
+        )
+        bot.write(('CAP', 'END'))  # close negotiation now
+        bot.quit('Configuration error.')
+        return None
+    except Exception as error:
+        LOGGER.exception(
+            'Error on ACK capability "%s": %s',
+            ', '.join(cap_ack),
+            error,
+        )
+        bot.write(('CAP', 'END'))  # close negotiation now
+        bot.quit('Error negotiating capabilities.')
+        return None
+
+    if result is None:
+        # a plugin may have requested the capability without using the proper
+        # interface: ignore
+        return None
+
+    _handle_cap_acknowledgement(bot, cap_ack, result, was_completed)
+
+
+def _receive_cap_nak(bot: SopelWrapper, trigger: Trigger) -> None:
+    was_completed = bot.cap_requests.is_complete
+    cap_ack = bot.capabilities.handle_nak(bot, trigger)
+
+    try:
+        result: Optional[
+            list[tuple[bool, Optional[plugin.CapabilityNegotiation]]]
+        ] = bot.cap_requests.deny(bot, cap_ack)
+    except config.ConfigurationError as error:
+        LOGGER.error(
+            'Configuration error on NAK capability "%s": %s',
+            ', '.join(cap_ack),
+            error,
+        )
+        bot.write(('CAP', 'END'))  # close negotiation now
+        bot.quit('Configuration error.')
+        return None
+    except Exception as error:
+        LOGGER.exception(
+            'Error on NAK capability "%s": %s',
+            ', '.join(cap_ack),
+            error,
+        )
+        bot.write(('CAP', 'END'))  # close negotiation now
+        bot.quit('Error negotiating capabilities.')
+        return None
+
+    if result is None:
+        # a plugin may have requested the capability without using the proper
+        # interface: ignore
+        return None
+
+    _handle_cap_acknowledgement(bot, cap_ack, result, was_completed)
+
+
+def _receive_cap_new(bot: SopelWrapper, trigger: Trigger) -> None:
+    cap_new = bot.capabilities.handle_new(bot, trigger)
+    LOGGER.info('Capability is now available: %s', ', '.join(cap_new))
+    # TODO: try to request what wasn't requested before
+
+
+def _receive_cap_del(bot: SopelWrapper, trigger: Trigger) -> None:
+    cap_del = bot.capabilities.handle_del(bot, trigger)
+    LOGGER.info('Capability is now unavailable: %s', ', '.join(cap_del))
+    # TODO: what to do when a CAP is removed? NAK callbacks?
+
+
+CAP_HANDLERS: dict[str, Callable[[SopelWrapper, Trigger], None]] = {
+    'LS': _receive_cap_ls_reply,  # Server is listing capabilities
+    'ACK': _receive_cap_ack,  # Server is acknowledging a capability
+    'NAK': _receive_cap_nak,  # Server is denying a capability
+    'NEW': _receive_cap_new,  # Server is adding new capability
+    'DEL': _receive_cap_del,  # Server is removing a capability
+}
 
 
 @plugin.event('CAP')
 @plugin.thread(False)
 @plugin.unblockable
 @plugin.priority('medium')
-def receive_cap_list(bot, trigger):
+def receive_cap_list(bot: SopelWrapper, trigger: Trigger) -> None:
     """Handle client capability negotiation."""
-    cap = trigger.strip('-=~')
-    # Server is listing capabilities
-    if trigger.args[1] == 'LS':
-        receive_cap_ls_reply(bot, trigger)
-    # Server denied CAP REQ
-    elif trigger.args[1] == 'NAK':
-        entry = bot._cap_reqs.get(cap, None)
-        # If it was requested with bot.cap_req
-        if entry:
-            for req in entry:
-                # And that request was mandatory/prohibit, and a callback was
-                # provided
-                if req.prefix and req.failure:
-                    # Call it.
-                    req.failure(bot, req.prefix + cap)
-    # Server is removing a capability
-    elif trigger.args[1] == 'DEL':
-        entry = bot._cap_reqs.get(cap, None)
-        # If it was requested with bot.cap_req
-        if entry:
-            for req in entry:
-                # And that request wasn't prohibit, and a callback was
-                # provided
-                if req.prefix != '-' and req.failure:
-                    # Call it.
-                    req.failure(bot, req.prefix + cap)
-    # Server is adding new capability
-    elif trigger.args[1] == 'NEW':
-        entry = bot._cap_reqs.get(cap, None)
-        # If it was requested with bot.cap_req
-        if entry:
-            for req in entry:
-                # And that request wasn't prohibit
-                if req.prefix != '-':
-                    # Request it
-                    bot.write(('CAP', 'REQ', req.prefix + cap))
-    # Server is acknowledging a capability
-    elif trigger.args[1] == 'ACK':
-        caps = trigger.args[2].split()
-        for cap in caps:
-            cap.strip('-~= ')
-            bot.enabled_capabilities.add(cap)
-            entry = bot._cap_reqs.get(cap, [])
-            for req in entry:
-                if req.success:
-                    req.success(bot, req.prefix + trigger)
-            if cap == 'sasl':  # TODO why is this not done with bot.cap_req?
-                try:
-                    receive_cap_ack_sasl(bot)
-                except ConfigurationError as error:
-                    LOGGER.error(str(error))
-                    bot.quit('Wrong SASL configuration.')
-
-
-def receive_cap_ls_reply(bot, trigger):
-    if bot.server_capabilities:
-        # We've already seen the results, so someone sent CAP LS from a plugin.
-        # We're too late to do SASL, and we don't want to send CAP END before
-        # the plugin has done what it needs to, so just return
-        return
-
-    for cap in trigger.split():
-        c = cap.split('=')
-        if len(c) == 2:
-            batched_caps[c[0]] = c[1]
-        else:
-            batched_caps[c[0]] = None
-
-    # Not the last in a multi-line reply. First two args are * and LS.
-    if trigger.args[2] == '*':
-        return
-
-    LOGGER.info(
-        "Client capability negotiation list: %s",
-        ', '.join(batched_caps.keys()),
-    )
-    bot.server_capabilities = batched_caps
-
-    # If some other plugin requests it, we don't need to add another request.
-    # If some other plugin prohibits it, we shouldn't request it.
-    core_caps = [
-        'echo-message',
-        'multi-prefix',
-        'away-notify',
-        'chghost',
-        'cap-notify',
-        'server-time',
-        'userhost-in-names',
-    ]
-    for cap in core_caps:
-        if cap not in bot._cap_reqs:
-            bot._cap_reqs[cap] = [CapReq('', 'coretasks')]
-
-    def acct_warn(bot, cap):
-        LOGGER.info("Server does not support %s, or it conflicts with a custom "
-                    "plugin. User account validation unavailable or limited.",
-                    cap[1:])
-        if bot.config.core.owner_account or bot.config.core.admin_accounts:
-            LOGGER.warning(
-                "Owner or admin accounts are configured, but %s is not "
-                "supported by the server. This may cause unexpected behavior.",
-                cap[1:])
-    auth_caps = ['account-notify', 'extended-join', 'account-tag']
-    for cap in auth_caps:
-        if cap not in bot._cap_reqs:
-            bot._cap_reqs[cap] = [CapReq('', 'coretasks', acct_warn)]
-
-    for cap, reqs in bot._cap_reqs.items():
-        # At this point, we know mandatory and prohibited don't co-exist, but
-        # we need to call back for optionals if they're also prohibited
-        prefix = ''
-        for entry in reqs:
-            if prefix == '-' and entry.prefix != '-':
-                entry.failure(bot, entry.prefix + cap)
-                continue
-            if entry.prefix:
-                prefix = entry.prefix
-
-        # It's not required, or it's supported, so we can request it
-        if prefix != '=' or cap in bot.server_capabilities:
-            # REQs fail as a whole, so we send them one capability at a time
-            bot.write(('CAP', 'REQ', entry.prefix + cap))
-        # If it's required but not in server caps, we need to call all the
-        # callbacks
-        else:
-            for entry in reqs:
-                if entry.failure and entry.prefix == '=':
-                    entry.failure(bot, entry.prefix + cap)
-
-    # If we want to do SASL, we have to wait before we can send CAP END. So if
-    # we are, wait on 903 (SASL successful) to send it.
-    if bot.config.core.auth_method == 'sasl' or bot.config.core.server_auth_method == 'sasl':
-        bot.write(('CAP', 'REQ', 'sasl'))
+    subcommand = trigger.args[1]
+    if subcommand in CAP_HANDLERS:
+        handler = CAP_HANDLERS[subcommand]
+        handler(bot, trigger)
     else:
-        bot.write(('CAP', 'END'))
-        LOGGER.info("End of client capability negotiation requests.")
-
-
-def receive_cap_ack_sasl(bot):
-    # Presumably we're only here if we said we actually *want* sasl, but still
-    # check anyway in case the server glitched.
-    password, mech = _get_sasl_pass_and_mech(bot)
-    if not password:
-        return
-
-    available_mechs = bot.server_capabilities.get('sasl', '')
-    available_mechs = available_mechs.split(',') if available_mechs else []
-
-    if available_mechs and mech not in available_mechs:
-        """
-        Raise an error if configured to use an unsupported SASL mechanism,
-        but only if the server actually advertised supported mechanisms,
-        i.e. this network supports SASL 3.2
-
-        SASL 3.1 failure is handled (when possible) by the sasl_mechs() function
-
-        See https://github.com/sopel-irc/sopel/issues/1780 for background
-        """
-        raise ConfigurationError(
-            "SASL mechanism '{}' is not advertised by this server.".format(mech))
-
-    bot.write(('AUTHENTICATE', mech))
+        LOGGER.info('Unknown CAP subcommand received: %s', subcommand)
 
 
 def send_authenticate(bot, token):
@@ -1058,14 +1235,20 @@ def auth_proceed(bot, trigger):
     sasl_username = sasl_username or bot.nick
 
     if mech == 'PLAIN':
-        if trigger.args[0] != '+':
-            # not an expected response from the server; abort SASL
-            token = '*'
-        else:
+        if trigger.args[0] == '+':
             sasl_token = _make_sasl_plain_token(sasl_username, sasl_password)
             LOGGER.info("Sending SASL Auth token.")
             send_authenticate(bot, sasl_token)
-        return
+            return
+        else:
+            # Not an expected response from the server
+            LOGGER.warning(
+                'Aborting SASL: unexpected server reply "%s"', trigger,
+            )
+            # Send `authenticate-abort` command
+            # See https://ircv3.net/specs/extensions/sasl-3.1#the-authenticate-command
+            bot.write(('AUTHENTICATE', '*'))
+            return
 
     # TODO: Implement SCRAM challenges
 
@@ -1078,17 +1261,10 @@ def _make_sasl_plain_token(account, password):
 @plugin.thread(False)
 @plugin.unblockable
 @plugin.priority('medium')
-def sasl_success(bot, trigger):
-    """End CAP request on successful SASL auth.
-
-    If SASL is configured, then the bot won't send ``CAP END`` once it gets
-    all the capability responses; it will wait for SASL auth result.
-
-    In this case, the SASL auth is a success, so we can close the negotiation.
-    """
+def sasl_success(bot: SopelWrapper, trigger: Trigger):
+    """Resume capability negotiation on successful SASL auth."""
     LOGGER.info("Successful SASL Auth.")
-    bot.write(('CAP', 'END'))
-    LOGGER.info("End of client capability negotiation requests.")
+    bot.resume_capability_negotiation(CAP_SASL.cap_req, 'coretasks')
 
 
 @plugin.event(events.ERR_SASLFAIL)
@@ -1103,6 +1279,9 @@ def sasl_fail(bot, trigger):
     LOGGER.error(
         "SASL Auth Failed; check your configuration: %s",
         str(trigger))
+    # negotiation done
+    bot.resume_capability_negotiation(CAP_SASL.cap_req, 'coretasks')
+    # quit
     bot.quit('SASL Auth Failed')
 
 
@@ -1115,6 +1294,8 @@ def sasl_mechs(bot, trigger):
     # check anyway in case the server glitched.
     password, mech = _get_sasl_pass_and_mech(bot)
     if not password:
+        # negotiation done
+        bot.resume_capability_negotiation(CAP_SASL.cap_req, 'coretasks')
         return
 
     supported_mechs = trigger.args[1].split(',')
@@ -1132,7 +1313,7 @@ def sasl_mechs(bot, trigger):
         to an IRC server NOT implementing the optional 908 reply.
 
         A network with SASL 3.2 should theoretically never get this far because
-        Sopel should catch the unadvertised mechanism in receive_cap_ack_sasl().
+        Sopel should catch the unadvertised mechanism in CAP_SASL.
 
         See https://github.com/sopel-irc/sopel/issues/1780 for background
         """
@@ -1142,6 +1323,7 @@ def sasl_mechs(bot, trigger):
             mech,
             ', '.join(supported_mechs),
         )
+        bot.resume_capability_negotiation(CAP_SASL.cap_req, 'coretasks')
         bot.quit('Wrong SASL configuration.')
     else:
         LOGGER.info(
@@ -1171,39 +1353,42 @@ def _get_sasl_pass_and_mech(bot):
 
 
 @plugin.commands('blocks')
+@plugin.example(r'.blocks del nick falsep0sitive', user_help=True)
+@plugin.example(r'.blocks add host some\.malicious\.network', user_help=True)
+@plugin.example(r'.blocks add nick sp(a|4)mb(o|0)t\d*', user_help=True)
 @plugin.thread(False)
 @plugin.unblockable
 @plugin.priority('low')
 @plugin.require_admin
 def blocks(bot, trigger):
-    """
-    Manage Sopel's blocking features.\
-    See [ignore system documentation]({% link _usage/ignoring-people.md %}).
+    """Manage Sopel's blocking features.
+
+    Full argspec: `list [nick|host]` or `[add|del] [nick|host] pattern`
     """
     STRINGS = {
         "success_del": "Successfully deleted block: %s",
         "success_add": "Successfully added block: %s",
         "no_nick": "No matching nick block found for: %s",
-        "no_host": "No matching hostmask block found for: %s",
-        "invalid": "Invalid format for %s a block. Try: .blocks add (nick|hostmask) sopel",
+        "no_host": "No matching host block found for: %s",
+        "invalid": "Invalid format for %s a block. Try: .blocks add (nick|host) sopel",
         "invalid_display": "Invalid input for displaying blocks.",
         "nonelisted": "No %s listed in the blocklist.",
         'huh': "I could not figure out what you wanted to do.",
     }
 
-    masks = set(s for s in bot.config.core.host_blocks if s != '')
-    nicks = set(Identifier(nick)
+    hosts = set(s for s in bot.config.core.host_blocks if s != '')
+    nicks = set(bot.make_identifier(nick)
                 for nick in bot.config.core.nick_blocks
                 if nick != '')
     text = trigger.group().split()
 
     if len(text) == 3 and text[1] == "list":
-        if text[2] == "hostmask":
-            if len(masks) > 0:
-                blocked = ', '.join(str(mask) for mask in masks)
-                bot.say("Blocked hostmasks: {}".format(blocked))
+        if text[2] == "host":
+            if len(hosts) > 0:
+                blocked = ', '.join(str(host) for host in hosts)
+                bot.say("Blocked hosts: {}".format(blocked))
             else:
-                bot.reply(STRINGS['nonelisted'] % ('hostmasks'))
+                bot.reply(STRINGS['nonelisted'] % ('hosts'))
         elif text[2] == "nick":
             if len(nicks) > 0:
                 blocked = ', '.join(str(nick) for nick in nicks)
@@ -1218,9 +1403,10 @@ def blocks(bot, trigger):
             nicks.add(text[3])
             bot.config.core.nick_blocks = nicks
             bot.config.save()
-        elif text[2] == "hostmask":
-            masks.add(text[3].lower())
-            bot.config.core.host_blocks = list(masks)
+        elif text[2] == "host":
+            hosts.add(text[3].lower())
+            bot.config.core.host_blocks = list(hosts)
+            bot.config.save()
         else:
             bot.reply(STRINGS['invalid'] % ("adding"))
             return
@@ -1229,20 +1415,21 @@ def blocks(bot, trigger):
 
     elif len(text) == 4 and text[1] == "del":
         if text[2] == "nick":
-            if Identifier(text[3]) not in nicks:
+            nick = bot.make_identifier(text[3])
+            if nick not in nicks:
                 bot.reply(STRINGS['no_nick'] % (text[3]))
                 return
-            nicks.remove(Identifier(text[3]))
+            nicks.remove(nick)
             bot.config.core.nick_blocks = [str(n) for n in nicks]
             bot.config.save()
             bot.reply(STRINGS['success_del'] % (text[3]))
-        elif text[2] == "hostmask":
-            mask = text[3].lower()
-            if mask not in masks:
+        elif text[2] == "host":
+            host = text[3].lower()
+            if host not in hosts:
                 bot.reply(STRINGS['no_host'] % (text[3]))
                 return
-            masks.remove(mask)
-            bot.config.core.host_blocks = [str(m) for m in masks]
+            hosts.remove(host)
+            bot.config.core.host_blocks = [str(m) for m in hosts]
             bot.config.save()
             bot.reply(STRINGS['success_del'] % (text[3]))
         else:
@@ -1275,7 +1462,7 @@ def recv_chghost(bot, trigger):
     bot.users[trigger.nick].host = new_host
     LOGGER.info(
         "Update user@host for nick %r: %s@%s",
-        trigger.nick, new_user, new_host)
+        str(trigger.nick), new_user, new_host)
 
 
 @plugin.event('ACCOUNT')
@@ -1291,7 +1478,7 @@ def account_notify(bot, trigger):
     if account == '*':
         account = None
     bot.users[trigger.nick].account = account
-    LOGGER.info("Update account for nick %r: %s", trigger.nick, account)
+    LOGGER.info("Update account for nick %r: %s", str(trigger.nick), account)
 
 
 @plugin.event(events.RPL_WHOSPCRPL)
@@ -1300,23 +1487,36 @@ def account_notify(bot, trigger):
 @plugin.priority('medium')
 def recv_whox(bot, trigger):
     """Track ``WHO`` responses when ``WHOX`` is enabled."""
-    if len(trigger.args) < 2 or trigger.args[1] != CORE_QUERYTYPE:
+    if len(trigger.args) < 2 or trigger.args[1] != WHOX_QUERYTYPE:
         # Ignored, some plugin probably called WHO
         LOGGER.debug("Ignoring WHO reply for channel '%s'; not queried by coretasks", trigger.args[1])
         return
-    if len(trigger.args) != 8:
+    if len(trigger.args) != len(WHOX_QUERY):
         LOGGER.warning(
             "While populating `bot.accounts` a WHO response was malformed.")
         return
-    _, _, channel, user, host, nick, status, account = trigger.args
+    _, _, channel, user, host, nick, status, account, realname = trigger.args
+    botmode = bot.isupport.get('BOT')
     away = 'G' in status
+    is_bot = (botmode in status) if botmode else None
     modes = ''.join([c for c in status if c in '~&@%+!'])
-    _record_who(bot, channel, user, host, nick, account, away, modes)
+    _record_who(bot, channel, user, host, nick, realname, account, away, is_bot, modes)
 
 
-def _record_who(bot, channel, user, host, nick, account=None, away=None, modes=None):
-    nick = Identifier(nick)
-    channel = Identifier(channel)
+def _record_who(
+    bot: Sopel,
+    channel: Identifier,
+    user: str,
+    host: str,
+    nick: str,
+    realname: Optional[str] = None,
+    account: Optional[str] = None,
+    away: Optional[bool] = None,
+    is_bot: Optional[bool] = None,
+    modes: Optional[str] = None,
+):
+    nick = bot.make_identifier(nick)
+    channel = bot.make_identifier(channel)
     if nick not in bot.users:
         usr = target.User(nick, user, host)
         bot.users[nick] = usr
@@ -1327,12 +1527,16 @@ def _record_who(bot, channel, user, host, nick, account=None, away=None, modes=N
             usr.host = host
         if usr.user is None and user:
             usr.user = user
+    if realname:
+        usr.realname = realname
     if account == '0':
         usr.account = None
     else:
         usr.account = account
     if away is not None:
         usr.away = away
+    if is_bot is not None:
+        usr.is_bot = is_bot
     priv = 0
     if modes:
         mapping = {
@@ -1346,7 +1550,11 @@ def _record_who(bot, channel, user, host, nick, account=None, away=None, modes=N
         for c in modes:
             priv = priv | mapping[c]
     if channel not in bot.channels:
-        bot.channels[channel] = target.Channel(channel)
+        bot.channels[channel] = target.Channel(
+            channel,
+            identifier_factory=bot.make_identifier,
+        )
+
     bot.channels[channel].add_user(usr, privs=priv)
 
 
@@ -1357,9 +1565,15 @@ def _record_who(bot, channel, user, host, nick, account=None, away=None, modes=N
 def recv_who(bot, trigger):
     """Track ``WHO`` responses when ``WHOX`` is not enabled."""
     channel, user, host, _, nick, status = trigger.args[1:7]
+    botmode = bot.isupport.get('BOT')
+    realname = trigger.args[-1].partition(' ')[-1]
     away = 'G' in status
+    is_bot = (botmode in status) if botmode else None
     modes = ''.join([c for c in status if c in '~&@%+!'])
-    _record_who(bot, channel, user, host, nick, away=away, modes=modes)
+    _record_who(
+        bot, channel, user, host, nick, realname,
+        away=away, is_bot=is_bot, modes=modes,
+    )
 
 
 @plugin.event('AWAY')
@@ -1401,9 +1615,8 @@ def handle_url_callbacks(bot, trigger):
     For each URL found in the trigger, trigger the URL callback registered by
     the ``@url`` decorator.
     """
-    schemes = bot.config.core.auto_url_schemes
     # find URLs in the trigger
-    for url in web.search_urls(trigger, schemes=schemes):
+    for url in trigger.urls:
         # find callbacks for said URL
         for function, match in bot.search_url_callbacks(url):
             # trigger callback defined by the `@url` decorator

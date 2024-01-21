@@ -1,15 +1,15 @@
 """Test for the ``sopel.plugins`` module."""
-from __future__ import generator_stop
+from __future__ import annotations
 
+import importlib.metadata
 import sys
 
-import pkg_resources
 import pytest
 
 from sopel import plugins
 
 
-MOCK_MODULE_CONTENT = """from __future__ import generator_stop
+MOCK_MODULE_CONTENT = """from __future__ import annotations
 from sopel import plugin
 
 
@@ -132,14 +132,13 @@ def test_plugin_load_entry_point(tmpdir):
     mod_file = root.join('file_mod.py')
     mod_file.write(MOCK_MODULE_CONTENT)
 
-    # generate setuptools Distribution object
-    distrib = pkg_resources.Distribution(root.strpath)
+    # set up for manual load/import
     sys.path.append(root.strpath)
 
     # load the entry point
     try:
-        entry_point = pkg_resources.EntryPoint(
-            'test_plugin', 'file_mod', dist=distrib)
+        entry_point = importlib.metadata.EntryPoint(
+            'test_plugin', 'file_mod', 'sopel.plugins')
         plugin = plugins.handlers.EntryPointPlugin(entry_point)
         plugin.load()
     finally:
@@ -156,3 +155,12 @@ def test_plugin_load_entry_point(tmpdir):
     assert hasattr(test_mod, 'example_url')
     assert hasattr(test_mod, 'shutdown')
     assert hasattr(test_mod, 'ignored')
+
+
+def test_plugin_skip_broken_links(tmp_path):
+    plugins_path = tmp_path
+    plugin = plugins_path.joinpath("amazing_plugin.py")
+    link_target = plugins_path.joinpath("nonexistent_file.py")
+    plugin.symlink_to(link_target)
+
+    assert list(plugins._list_plugin_filenames(plugins_path)) == []

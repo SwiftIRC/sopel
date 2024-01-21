@@ -1,9 +1,7 @@
 """Tests sopel.tools"""
-from __future__ import generator_stop
+from __future__ import annotations
 
 import re
-
-import pytest
 
 from sopel import tools
 
@@ -14,105 +12,6 @@ owner = testnick
 nick = TestBot
 enable = coretasks
 """
-
-
-@pytest.fixture
-def nick():
-    return 'Sopel'
-
-
-@pytest.fixture
-def alias_nicks():
-    return ['Soap', 'Pie']
-
-
-@pytest.fixture
-def prefix():
-    return '.'
-
-
-@pytest.fixture
-def prefix_regex():
-    re.escape(prefix())
-
-
-@pytest.fixture
-def command():
-    return 'testcmd'
-
-
-@pytest.fixture
-def groups(command):
-    return {
-        3: "three",
-        4: "four",
-        5: "five",
-        6: "six",
-    }
-
-
-@pytest.fixture
-def command_line(prefix, command, groups):
-    return "{}{} {}".format(prefix, command, ' '.join(groups.values()))
-
-
-@pytest.fixture
-def nickname_command_line(nick, command, groups):
-    return "{}: {} {}".format(nick, command, ' '.join(groups.values()))
-
-
-@pytest.fixture
-def action_command_line(command, groups):
-    return "{} {}".format(command, ' '.join(groups.values()))
-
-
-def test_command_groups(prefix, command, groups, command_line):
-    regex = tools.get_command_regexp(prefix, command)
-    match = re.match(regex, command_line)
-    assert match.group(0) == command_line
-    assert match.group(1) == command
-    assert match.group(2) == ' '.join(groups.values())
-    assert match.group(3) == groups[3]
-    assert match.group(4) == groups[4]
-    assert match.group(5) == groups[5]
-    assert match.group(6) == groups[6]
-
-
-def test_nickname_command_groups(command, nick, groups, nickname_command_line):
-    regex = tools.get_nickname_command_regexp(nick, command, [])
-    match = re.match(regex, nickname_command_line)
-    assert match.group(0) == nickname_command_line
-    assert match.group(1) == command
-    assert match.group(2) == ' '.join(groups.values())
-    assert match.group(3) == groups[3]
-    assert match.group(4) == groups[4]
-    assert match.group(5) == groups[5]
-    assert match.group(6) == groups[6]
-
-
-def test_nickname_command_aliased(command, nick, alias_nicks, groups, nickname_command_line):
-    aliased_command_line = nickname_command_line.replace(nick, alias_nicks[0])
-    regex = tools.get_nickname_command_regexp(nick, command, alias_nicks)
-    match = re.match(regex, aliased_command_line)
-    assert match.group(0) == aliased_command_line
-    assert match.group(1) == command
-    assert match.group(2) == ' '.join(groups.values())
-    assert match.group(3) == groups[3]
-    assert match.group(4) == groups[4]
-    assert match.group(5) == groups[5]
-    assert match.group(6) == groups[6]
-
-
-def test_action_command_groups(command, groups, action_command_line):
-    regex = tools.get_action_command_regexp(command)
-    match = re.match(regex, action_command_line)
-    assert match.group(0) == action_command_line
-    assert match.group(1) == command
-    assert match.group(2) == ' '.join(groups.values())
-    assert match.group(3) == groups[3]
-    assert match.group(4) == groups[4]
-    assert match.group(5) == groups[5]
-    assert match.group(6) == groups[6]
 
 
 def test_get_sendable_message_default():
@@ -202,6 +101,92 @@ def test_get_sendable_message_two_bytes():
     assert excess == 'α α'
 
 
+def test_get_sendable_message_three_bytes():
+    text, excess = tools.get_sendable_message('अअअअ', 6)
+    assert text == 'अअ'
+    assert excess == 'अअ'
+
+    text, excess = tools.get_sendable_message('अअअअ', 7)
+    assert text == 'अअ'
+    assert excess == 'अअ'
+
+    text, excess = tools.get_sendable_message('अअअअ', 8)
+    assert text == 'अअ'
+    assert excess == 'अअ'
+
+    text, excess = tools.get_sendable_message('अ अअअ', 6)
+    assert text == 'अ'
+    assert excess == 'अअअ'
+
+    text, excess = tools.get_sendable_message('अअ अअ', 6)
+    assert text == 'अअ'
+    assert excess == 'अअ'
+
+    text, excess = tools.get_sendable_message('अअअ अ', 6)
+    assert text == 'अअ'
+    assert excess == 'अ अ'
+
+
+def test_get_sendable_message_four_bytes():
+    text, excess = tools.get_sendable_message('𡃤𡃤𡃤𡃤', 8)
+    assert text == '𡃤𡃤'
+    assert excess == '𡃤𡃤'
+
+    text, excess = tools.get_sendable_message('𡃤𡃤𡃤𡃤', 9)
+    assert text == '𡃤𡃤'
+    assert excess == '𡃤𡃤'
+
+    text, excess = tools.get_sendable_message('𡃤𡃤𡃤𡃤', 10)
+    assert text == '𡃤𡃤'
+    assert excess == '𡃤𡃤'
+
+    text, excess = tools.get_sendable_message('𡃤𡃤𡃤𡃤', 11)
+    assert text == '𡃤𡃤'
+    assert excess == '𡃤𡃤'
+
+    text, excess = tools.get_sendable_message('𡃤 𡃤𡃤𡃤', 8)
+    assert text == '𡃤'
+    assert excess == '𡃤𡃤𡃤'
+
+    text, excess = tools.get_sendable_message('𡃤𡃤 𡃤𡃤', 8)
+    assert text == '𡃤𡃤'
+    assert excess == '𡃤𡃤'
+
+    text, excess = tools.get_sendable_message('𡃤𡃤𡃤 𡃤', 8)
+    assert text == '𡃤𡃤'
+    assert excess == '𡃤 𡃤'
+
+
+def test_get_sendable_message_bigger_multibyte_whitespace():
+    """Tests that the logic doesn't break for multi-word strings with emoji.
+
+    Testing multibyte characters without whitespace is fine, but there's an
+    alternate code path to exercise.
+    """
+    text = (
+        'Egg 🍳 and bacon; 🐷 egg, 🍳 sausage 🌭 and bacon; 🥓 egg 🐣 and spam; '
+        'egg, 🍳 bacon 🥓 and spam, egg, 🍳 bacon, 🥓 sausage 🌭 and spam; spam, '
+        'bacon, 🐖 sausage 🌭 and spam; spam, egg, 🍳 spam, spam, bacon 🐖 and '
+        'spam; spam, spam, spam, egg 🥚🍳 and spam; spam, spam, spam, spam, spam, '
+        'spam, baked beans, 🍛 spam, spam, spam and spam; lobster 🦞 thermidor aux '
+        'crevettes with a mornay sauce garnished with truffle paté, 👨😏 brandy'
+        'and a fried 🍤 egg 🥚🍳 on 🔛 top 🎩 and spam')
+
+    first, second = tools.get_sendable_message(text)
+    expected_first = (
+        'Egg 🍳 and bacon; 🐷 egg, 🍳 sausage 🌭 and bacon; 🥓 egg 🐣 and spam; '
+        'egg, 🍳 bacon 🥓 and spam, egg, 🍳 bacon, 🥓 sausage 🌭 and spam; spam, '
+        'bacon, 🐖 sausage 🌭 and spam; spam, egg, 🍳 spam, spam, bacon 🐖 and '
+        'spam; spam, spam, spam, egg 🥚🍳 and spam; spam, spam, spam, spam, spam, '
+        'spam, baked beans, 🍛 spam, spam, spam and spam; lobster 🦞 thermidor aux')
+    expected_second = (
+        'crevettes with a mornay sauce garnished with truffle paté, 👨😏 brandy'
+        'and a fried 🍤 egg 🥚🍳 on 🔛 top 🎩 and spam')
+
+    assert first == expected_first
+    assert second == expected_second
+
+
 def test_chain_loaders(configfactory):
     re_numeric = re.compile(r'\d+')
     re_text = re.compile(r'\w+')
@@ -219,54 +204,3 @@ def test_chain_loaders(configfactory):
     results = loader(settings)
 
     assert results == [re_numeric, re_text]
-
-
-def test_sopel_identifier_memory_str():
-    user = tools.Identifier('Exirel')
-    memory = tools.SopelIdentifierMemory()
-    test_value = 'king'
-
-    memory['Exirel'] = test_value
-    assert user in memory
-    assert 'Exirel' in memory
-    assert 'exirel' in memory
-    assert 'exi' not in memory
-    assert '#channel' not in memory
-
-    assert memory[user] == test_value
-    assert memory['Exirel'] == test_value
-    assert memory['exirel'] == test_value
-
-
-def test_sopel_identifier_memory_id():
-    user = tools.Identifier('Exirel')
-    memory = tools.SopelIdentifierMemory()
-    test_value = 'king'
-
-    memory[user] = test_value
-    assert user in memory
-    assert 'Exirel' in memory
-    assert 'exirel' in memory
-    assert 'exi' not in memory
-    assert '#channel' not in memory
-
-    assert memory[user] == test_value
-    assert memory['Exirel'] == test_value
-    assert memory['exirel'] == test_value
-
-
-def test_sopel_identifier_memory_channel_str():
-    channel = tools.Identifier('#adminchannel')
-    memory = tools.SopelIdentifierMemory()
-    test_value = 'perfect'
-
-    memory['#adminchannel'] = test_value
-    assert channel in memory
-    assert '#adminchannel' in memory
-    assert '#AdminChannel' in memory
-    assert 'adminchannel' not in memory
-    assert 'Exirel' not in memory
-
-    assert memory[channel] == test_value
-    assert memory['#adminchannel'] == test_value
-    assert memory['#AdminChannel'] == test_value

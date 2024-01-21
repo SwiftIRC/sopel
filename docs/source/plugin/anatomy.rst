@@ -92,6 +92,11 @@ two options:
 
 .. __: https://ircv3.net/specs/extensions/account-tag-3.2
 
+.. seealso::
+
+   Read the :doc:`privileges` chapter for more information on how to manage
+   privileges and access management in a plugin.
+
 Rate limiting
 -------------
 
@@ -118,6 +123,44 @@ Example::
 
 A rule with rate-limiting can return :const:`sopel.plugin.NOLIMIT` to let the
 user try again after a failed command, e.g. if a required argument is missing.
+
+.. seealso::
+
+   There are three other decorators to use:
+
+   * :func:`sopel.plugin.rate_user`
+   * :func:`sopel.plugin.rate_channel`
+   * :func:`sopel.plugin.rate_global`
+
+   These decorators can be used independently and will always override the
+   value set by ``rate()``. They also accept a dedicated message. See their
+   respective documentation for more information.
+
+Bypassing restrictions
+----------------------
+
+By default, a :term:`Rule` will not trigger on messages from Sopel itself,
+other users that are flagged as bots, or users who are
+:ref:`ignored <Ignoring Users>` or :ref:`rate-limited <Rate limiting>`. In
+certain cases, it might be desirable to bypass these defaults using one or
+more of these decorators:
+
+* :func:`sopel.plugin.allow_bots`: the rule will accept events from other
+  users who are flagged as bots (like Sopel itself)
+* :func:`sopel.plugin.echo`: the rule will accept Sopel's own output (e.g.
+  from calls to :func:`bot.say() <sopel.bot.Sopel.say>`)
+* :func:`sopel.plugin.unblockable`: the rule will ignore rate-limiting or
+  nick/host blocks and always process the event
+
+For example, Sopel itself uses the :func:`sopel.plugin.unblockable` decorator
+to track joins/parts from everyone, always, so plugins can *always* access
+data about any user in any channel.
+
+.. important::
+
+   The :func:`sopel.plugin.echo` decorator will send *anything* Sopel says
+   (that matches the rule) to the decorated callable, *including output from
+   the decorated callable*. Be careful not to create a feedback loop.
 
 Rule labels
 -----------

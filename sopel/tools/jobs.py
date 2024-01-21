@@ -11,7 +11,7 @@
 # Copyright 2019, Florian Strzelecki <florian.strzelecki@gmail.com>
 #
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
 import inspect
 import logging
@@ -193,7 +193,7 @@ class Scheduler(threading.Thread):
             self.manager.on_job_error(self, job, error)
 
 
-class Job(object):
+class Job:
     """Holds information about when a function should be called next.
 
     :param intervals: set of intervals; each is a number of seconds between

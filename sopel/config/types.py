@@ -23,20 +23,25 @@ As an example, if one wanted to define the ``[spam]`` section as having an
     ValueError: ListAttribute value must be a list.
 """
 
-from __future__ import generator_stop
+from __future__ import annotations
 
+import abc
 import getpass
+import logging
 import os.path
 import re
 
-from sopel.tools import deprecated, get_input
+from sopel.lifecycle import deprecated
 
 
-class NO_DEFAULT(object):
+LOGGER = logging.getLogger(__name__)
+
+
+class NO_DEFAULT:
     """A special value to indicate that there should be no default."""
 
 
-class StaticSection(object):
+class StaticSection:
     """A configuration section with parsed and validated settings.
 
     This class is intended to be subclassed and customized with added
@@ -95,8 +100,10 @@ class StaticSection(object):
         attribute = getattr(self.__class__, name)
         if default is NO_DEFAULT and not attribute.is_secret:
             try:
+                # get current value of this setting to use as prompt default
                 default = getattr(self, name)
             except AttributeError:
+                # there is no current value; that's OK
                 pass
             except ValueError:
                 print('The configured value for this option was invalid.')
@@ -113,10 +120,7 @@ class StaticSection(object):
         setattr(self, name, value)
 
 
-# TODO: Make this a proper abstract class when dropping Python 2 support.
-# Abstract classes are much simpler to deal with once we only need to worry
-# about Python 3.4 or newer. (https://stackoverflow.com/a/13646263/5991)
-class BaseValidated(object):
+class BaseValidated(abc.ABC):
     """The base type for a setting descriptor in a :class:`StaticSection`.
 
     :param str name: the attribute name to use in the config file
@@ -186,7 +190,7 @@ class BaseValidated(object):
         if self.is_secret:
             value = getpass.getpass(prompt + ' (hidden input) ')
         else:
-            value = get_input(prompt + ' ')
+            value = input(prompt + ' ')
 
         if not value and default is NO_DEFAULT:
             raise ValueError("You must provide a value for this option.")
@@ -196,18 +200,13 @@ class BaseValidated(object):
 
         return self._parse(value, parent, section)
 
+    @abc.abstractmethod
     def serialize(self, value, *args, **kwargs):
-        """Take some object, and return the string to be saved to the file.
+        """Take some object, and return the string to be saved to the file."""
 
-        Must be implemented in subclasses.
-        """
-        raise NotImplementedError("Serialize method must be implemented in subclass")
-
+    @abc.abstractmethod
     def parse(self, value, *args, **kwargs):
-        """Take a string from the file, and return the appropriate object.
-
-        Must be implemented in subclasses."""
-        raise NotImplementedError("Parse method must be implemented in subclass")
+        """Take a string from the file, and return the appropriate object."""
 
     def __get__(self, instance, owner=None):
         if instance is None:
@@ -273,6 +272,7 @@ def _serialize_boolean(value):
 @deprecated(
     reason='Use BooleanAttribute instead of ValidatedAttribute with parse=bool',
     version='7.1',
+    warning_in='8.0',
     removed_in='9.0',
     stack_frame=-2,
 )
@@ -304,14 +304,15 @@ class ValidatedAttribute(BaseValidated):
                  serialize=None,
                  default=None,
                  is_secret=False):
-        super(ValidatedAttribute, self).__init__(
-            name, default=default, is_secret=is_secret)
+        super().__init__(name, default=default, is_secret=is_secret)
 
         if parse == bool:
             parse, serialize = _deprecated_special_bool_handling(serialize)
 
-        self.parse = parse or self.parse
-        self.serialize = serialize or self.serialize
+        # ignore typing errors on these monkeypatches for now
+        # TODO: more dedicated subtypes; deprecate `parse`/`serialize` args
+        self.parse = parse or self.parse  # type: ignore
+        self.serialize = serialize or self.serialize  # type: ignore
 
     def serialize(self, value):
         """Return the ``value`` as a Unicode string.
@@ -333,7 +334,7 @@ class ValidatedAttribute(BaseValidated):
         if self.parse == _parse_boolean:
             prompt += ' (y/n)'
             default = 'y' if default else 'n'
-        return super(ValidatedAttribute, self).configure(prompt, default, parent, section_name)
+        return super().configure(prompt, default, parent, section_name)
 
 
 class BooleanAttribute(BaseValidated):
@@ -346,8 +347,7 @@ class BooleanAttribute(BaseValidated):
     If the ``default`` value is not specified, it will be ``False``.
     """
     def __init__(self, name, default=False):
-        super(BooleanAttribute, self).__init__(
-            name, default=default, is_secret=False)
+        super().__init__(name, default=default, is_secret=False)
 
     def configure(self, prompt, default, parent, section_name):
         """Parse and return a value from user's input.
@@ -363,7 +363,7 @@ class BooleanAttribute(BaseValidated):
         the ``default`` value is returned instead.
         """
         prompt = '{} ({})'.format(prompt, 'Y/n' if default else 'y/N')
-        value = get_input(prompt + ' ') or default
+        value = input(prompt + ' ') or default
         section = getattr(parent, section_name)
         return self._parse(value, parent, section)
 
@@ -416,7 +416,7 @@ class SecretAttribute(ValidatedAttribute):
     otherwise behaves like other any option.
     """
     def __init__(self, name, parse=None, serialize=None, default=None):
-        super(SecretAttribute, self).__init__(
+        super().__init__(
             name,
             parse=parse,
             serialize=serialize,
@@ -430,8 +430,8 @@ class ListAttribute(BaseValidated):
 
     :param str name: the attribute name to use in the config file
     :param strip: whether to strip whitespace from around each value
-                  (optional; applies only to legacy comma-separated lists;
-                  multi-line lists are always stripped)
+                  (optional, deprecated; applies only to legacy comma-separated
+                  lists; multi-line lists are always stripped)
     :type strip: bool
     :param default: the default value if the config file does not define a
                     value for this option; to require explicit configuration,
@@ -475,18 +475,20 @@ class ListAttribute(BaseValidated):
 
         **About:** backward compatibility with comma-separated values.
 
-        A :class:`ListAttribute` option allows to write, on a single line,
-        the values separated by commas. As of Sopel 7.x this behavior is
-        discouraged. It will be deprecated in Sopel 8.x, then removed in
-        Sopel 9.x.
+        A :class:`ListAttribute` option used to allow to write, on a single
+        line, the values separated by commas. It is still technically possible
+        while raising a deprecation warning.
 
-        Bot owners are encouraged to update their configurations to use
-        newlines instead of commas.
+        In Sopel 7.x this behavior was discouraged; as of Sopel 8.x it is now
+        deprecated with warnings, and it will be removed in Sopel 9.x.
+
+        Bot owners should update their configurations to use newlines instead
+        of commas.
 
         The comma delimiter fallback does not support commas within items in
         the list.
     """
-    DELIMITER = ','
+    DELIMITER = ','  # Deprecated, will be removed in Sopel 9
     QUOTE_REGEX = re.compile(r'^"(?P<value>#.*)"$')
     """Regex pattern to match value that requires quotation marks.
 
@@ -497,8 +499,8 @@ class ListAttribute(BaseValidated):
 
     def __init__(self, name, strip=True, default=None):
         default = default or []
-        super(ListAttribute, self).__init__(name, default=default)
-        self.strip = strip
+        super().__init__(name, default=default)
+        self.strip = strip  # Warn in Sopel 9.x and remove in Sopel 10.x
 
     def parse(self, value):
         """Parse ``value`` into a list.
@@ -514,6 +516,12 @@ class ListAttribute(BaseValidated):
 
             When modified and saved to a file, items will be stored as a
             multi-line string (see :meth:`serialize`).
+
+        .. versionchanged:: 8.0
+
+            When the value contains a delimiter without newline, it warns the
+            user to switch to a multi-line value, without a delimiter.
+
         """
         if "\n" in value:
             items = (
@@ -522,11 +530,18 @@ class ListAttribute(BaseValidated):
                 item.strip(self.DELIMITER).strip()
                 for item in value.splitlines())
         else:
-            # this behavior will be:
-            # - Discouraged in Sopel 7.x (in the documentation)
-            # - Deprecated in Sopel 8.x
-            # - Removed from Sopel 9.x
+            # this behavior was discouraged in Sopel 7.x (in the documentation)
+            # this behavior is now deprecated in Sopel 8.x
+            # this behavior will be removed from Sopel 9.x
             items = value.split(self.DELIMITER)
+            if self.DELIMITER in value:
+                # trigger for "one, two" and "first line,"
+                # a single line without the delimiter is fine
+                LOGGER.warning(
+                    'Using "%s" as item delimiter in option "%s" '
+                    'is deprecated and will be removed in Sopel 9; '
+                    'use multi-line instead',
+                    self.DELIMITER, self.name)
 
         items = (self.parse_item(item) for item in items if item)
         if self.strip:
@@ -592,8 +607,8 @@ class ListAttribute(BaseValidated):
         else:
             default = []
         print(prompt)
-        values = []
-        value = get_input(each_prompt + ' ') or default
+        values: list[str] = []
+        value = input(each_prompt + ' ') or default
         if (value == default) and not default:
             value = ''
         while value:
@@ -601,7 +616,7 @@ class ListAttribute(BaseValidated):
                 values.extend(value)
             else:
                 values.append(value)
-            value = get_input(each_prompt + ' ')
+            value = input(each_prompt + ' ')
 
         section = getattr(parent, section_name)
         values = self._serialize(values, parent, section)
@@ -620,7 +635,7 @@ class ChoiceAttribute(BaseValidated):
     :type default: str
     """
     def __init__(self, name, choices, default=None):
-        super(ChoiceAttribute, self).__init__(name, default=default)
+        super().__init__(name, default=default)
         self.choices = choices
 
     def parse(self, value):
@@ -667,7 +682,7 @@ class FilenameAttribute(BaseValidated):
     :type default: str
     """
     def __init__(self, name, relative=True, directory=False, default=None):
-        super(FilenameAttribute, self).__init__(name, default=default)
+        super().__init__(name, default=default)
         self.relative = relative
         self.directory = directory
 
@@ -683,6 +698,11 @@ class FilenameAttribute(BaseValidated):
 
         if not value:
             return self.parse(value)
+
+        if value.startswith('"') and value.endswith('"'):
+            value = value.strip('"')
+        elif value.startswith("'") and value.endswith("'"):
+            value = value.strip("'")
 
         result = os.path.expanduser(value)
         if not os.path.isabs(result):
@@ -729,7 +749,8 @@ class FilenameAttribute(BaseValidated):
                     "Value must be an existing or creatable directory.")
         if not self.directory and not os.path.isfile(value):
             try:
-                open(value, 'w').close()
+                with open(value, 'w') as f:
+                    f.close()
             except (IOError, OSError):
                 raise ValueError("Value must be an existing or creatable file.")
         return value

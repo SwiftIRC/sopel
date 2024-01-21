@@ -14,9 +14,9 @@
 # Copyright 2020, Florian Strzelecki <florian.strzelecki@gmail.com>
 #
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
-
+import abc
 import datetime
 import functools
 import inspect
@@ -24,12 +24,22 @@ import itertools
 import logging
 import re
 import threading
+from typing import (
+    Any,
+    Optional,
+    Type,
+    TYPE_CHECKING,
+    TypeVar,
+)
 from urllib.parse import urlparse
-
 
 from sopel import tools
 from sopel.config.core_section import (
     COMMAND_DEFAULT_HELP_PREFIX, COMMAND_DEFAULT_PREFIX, URL_DEFAULT_SCHEMES)
+
+if TYPE_CHECKING:
+    from collections.abc import Generator, Iterable
+    from sopel.tools.identifiers import Identifier
 
 
 __all__ = [
@@ -43,6 +53,19 @@ __all__ = [
     'URLCallback',
 ]
 
+TypedRule = TypeVar('TypedRule', bound='AbstractRule')
+"""A :class:`~typing.TypeVar` bound to :class:`AbstractRule`.
+
+When used in the :meth:`AbstractRule.from_callable` class method, it means the
+return value must be an instance of the class used to call that method and not
+a different subclass of ``AbstractRule``.
+
+.. versionadded:: 8.0
+
+    This ``TypeVar`` was added as part of a goal to start type-checking
+    Sopel and is not used at runtime.
+
+"""
 
 LOGGER = logging.getLogger(__name__)
 
@@ -76,10 +99,7 @@ def _clean_rules(rules, nick, aliases):
 
 def _compile_pattern(pattern, nick, aliases=None):
     if aliases:
-        nicks = list(aliases)  # alias_nicks.copy() doesn't work in py2
-        nicks.append(nick)
-        nicks = map(re.escape, nicks)
-        nick = '(?:%s)' % '|'.join(nicks)
+        nick = '(?:%s)' % '|'.join(re.escape(n) for n in (nick, *aliases))
     else:
         nick = re.escape(nick)
 
@@ -141,7 +161,7 @@ def _clean_callable_examples(examples):
     )
 
 
-class Manager(object):
+class Manager:
     """Manager of plugin rules.
 
     This manager stores plugin rules and can then provide the matching rules
@@ -443,7 +463,64 @@ class Manager(object):
         )
 
 
-class AbstractRule(object):
+class RuleMetrics:
+    """Tracker of a rule's usage."""
+    def __init__(self) -> None:
+        self.started_at: Optional[datetime.datetime] = None
+        self.ended_at: Optional[datetime.datetime] = None
+        self.last_return_value: Any = None
+
+    def start(self) -> None:
+        """Record a starting time (before execution)."""
+        self.started_at = datetime.datetime.now(datetime.timezone.utc)
+
+    def end(self) -> None:
+        """Record a ending time (after execution)."""
+        self.ended_at = datetime.datetime.now(datetime.timezone.utc)
+
+    def set_return_value(self, value: Any) -> None:
+        """Set the last return value of a rule."""
+        self.last_return_value = value
+
+    @property
+    def last_time(self) -> Optional[datetime.datetime]:
+        """Last recorded start/end time for the associated rule."""
+        # detect if we just started something or if it ended
+        if (self.started_at and self.ended_at) and (self.started_at < self.ended_at):
+            return self.ended_at
+
+        return self.started_at
+
+    def is_limited(
+        self,
+        time_limit: datetime.datetime,
+    ) -> bool:
+        """Determine if the rule hits the time limit."""
+        if not self.started_at:
+            # not even started, so not limited
+            return False
+
+        if self.ended_at and self.started_at < self.ended_at:
+            # since it ended, check the return value
+            if self.last_return_value == IGNORE_RATE_LIMIT:
+                return False
+
+        return self.last_time > time_limit if self.last_time else False
+
+    def __enter__(self) -> RuleMetrics:
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        type: Optional[Any],
+        value: Optional[Any],
+        traceback: Optional[Any],
+    ) -> None:
+        self.end()
+
+
+class AbstractRule(abc.ABC):
     """Abstract definition of a plugin's rule.
 
     Any rule class must be an implementation of this abstract class, as it
@@ -454,7 +531,7 @@ class AbstractRule(object):
     * label
     * doc, usages, and tests
     * output prefix
-    * matching patterns, events, and intents
+    * matching patterns, events, and CTCP commands
     * allow echo-message
     * threaded execution or not
     * rate limiting feature
@@ -463,7 +540,8 @@ class AbstractRule(object):
 
     """
     @classmethod
-    def from_callable(cls, settings, handler):
+    @abc.abstractmethod
+    def from_callable(cls: Type[TypedRule], settings, handler) -> TypedRule:
         """Instantiate a rule object from ``settings`` and ``handler``.
 
         :param settings: Sopel's settings
@@ -482,7 +560,6 @@ class AbstractRule(object):
         through the filter of the
         :func:`loader's clean<sopel.loader.clean_callable>` function.
         """
-        raise NotImplementedError
 
     @property
     def priority_scale(self):
@@ -499,7 +576,8 @@ class AbstractRule(object):
             PRIORITY_SCALES[PRIORITY_MEDIUM]
         )
 
-    def get_plugin_name(self):
+    @abc.abstractmethod
+    def get_plugin_name(self) -> str:
         """Get the rule's plugin name.
 
         :rtype: str
@@ -508,9 +586,9 @@ class AbstractRule(object):
         register, unregister, and manipulate the rule based on its plugin,
         which is referenced by its name.
         """
-        raise NotImplementedError
 
-    def get_rule_label(self):
+    @abc.abstractmethod
+    def get_rule_label(self) -> str:
         """Get the rule's label.
 
         :rtype: str
@@ -520,9 +598,9 @@ class AbstractRule(object):
         to select, register, unregister, and manipulate the rule based on its
         own label. Note that the label has no effect on the rule's execution.
         """
-        raise NotImplementedError
 
-    def get_usages(self):
+    @abc.abstractmethod
+    def get_usages(self) -> tuple:
         """Get the rule's usage examples.
 
         :rtype: tuple
@@ -530,9 +608,9 @@ class AbstractRule(object):
         A rule can have usage examples, i.e. a list of examples showing how
         the rule can be used, or in what context it can be triggered.
         """
-        raise NotImplementedError
 
-    def get_test_parameters(self):
+    @abc.abstractmethod
+    def get_test_parameters(self) -> tuple:
         """Get parameters for automated tests.
 
         :rtype: tuple
@@ -550,9 +628,9 @@ class AbstractRule(object):
             :meth:`sopel.plugin.example` for more about test parameters.
 
         """
-        raise NotImplementedError
 
-    def get_doc(self):
+    @abc.abstractmethod
+    def get_doc(self) -> str:
         """Get the rule's documentation.
 
         :rtype: str
@@ -561,9 +639,9 @@ class AbstractRule(object):
         on IRC upon asking for help about this rule. The equivalent of Python
         docstrings, but for IRC rules.
         """
-        raise NotImplementedError
 
-    def get_priority(self):
+    @abc.abstractmethod
+    def get_priority(self) -> str:
         """Get the rule's priority.
 
         :rtype: str
@@ -579,9 +657,9 @@ class AbstractRule(object):
             by priority.
 
         """
-        raise NotImplementedError
 
-    def get_output_prefix(self):
+    @abc.abstractmethod
+    def get_output_prefix(self) -> str:
         """Get the rule's output prefix.
 
         :rtype: str
@@ -591,9 +669,9 @@ class AbstractRule(object):
             See the :class:`sopel.bot.SopelWrapper` class for more information
             on how the output prefix can be used.
         """
-        raise NotImplementedError
 
-    def match(self, bot, pretrigger):
+    @abc.abstractmethod
+    def match(self, bot, pretrigger) -> Iterable:
         """Match a pretrigger according to the rule.
 
         :param bot: Sopel instance
@@ -603,89 +681,181 @@ class AbstractRule(object):
 
         This method must return a list of `match objects`__.
 
-        .. __: https://docs.python.org/3.6/library/re.html#match-objects
+        .. __: https://docs.python.org/3.11/library/re.html#match-objects
         """
-        raise NotImplementedError
 
-    def match_event(self, event):
+    @abc.abstractmethod
+    def match_event(self, event) -> bool:
         """Tell if the rule matches this ``event``.
 
         :param str event: potential matching event
         :return: ``True`` when ``event`` matches the rule, ``False`` otherwise
         :rtype: bool
         """
-        raise NotImplementedError
 
-    def match_intent(self, intent):
-        """Tell if the rule matches this ``intent``.
+    @abc.abstractmethod
+    def match_ctcp(self, command: Optional[str]) -> bool:
+        """Tell if the rule matches this CTCP ``command``.
 
-        :param str intent: potential matching intent
-        :return: ``True`` when ``intent`` matches the rule, ``False`` otherwise
-        :rtype: bool
+        :param command: potential matching CTCP command
+        :return: ``True`` when ``command`` matches the rule,
+                 ``False`` otherwise
         """
-        raise NotImplementedError
 
-    def allow_echo(self):
+    @abc.abstractmethod
+    def allow_bots(self) -> bool:
+        """Tell if the rule should match bot commands.
+
+        :return: ``True`` when the rule allows bot commands,
+                 ``False`` otherwise
+
+        A "bot command" is any IRC protocol command or numeric that has been
+        tagged as ``bot`` (or ``draft/bot``) by the IRC server.
+
+        .. seealso::
+
+            The `IRCv3 Bot Mode specification`__.
+
+        .. __: https://ircv3.net/specs/extensions/bot-mode
+        """
+
+    @abc.abstractmethod
+    def allow_echo(self) -> bool:
         """Tell if the rule should match echo messages.
 
         :return: ``True`` when the rule allows echo messages,
                  ``False`` otherwise
         :rtype: bool
         """
-        raise NotImplementedError
 
-    def is_threaded(self):
+    @abc.abstractmethod
+    def is_threaded(self) -> bool:
         """Tell if the rule's execution should be in a thread.
 
         :return: ``True`` if the execution should be in a thread,
                  ``False`` otherwise
         :rtype: bool
         """
-        raise NotImplementedError
 
-    def is_unblockable(self):
+    @abc.abstractmethod
+    def is_unblockable(self) -> bool:
         """Tell if the rule is unblockable.
 
         :return: ``True`` when the rule is unblockable, ``False`` otherwise
-        :rtype: bool
         """
-        raise NotImplementedError
 
-    def is_rate_limited(self, nick):
+    @abc.abstractmethod
+    def get_user_metrics(self, nick: Identifier) -> RuleMetrics:
+        """Get the rule's usage metrics for the given user."""
+
+    @abc.abstractmethod
+    def get_channel_metrics(self, channel: Identifier) -> RuleMetrics:
+        """Get the rule's usage metrics for the given channel."""
+
+    @abc.abstractmethod
+    def get_global_metrics(self) -> RuleMetrics:
+        """Get the rule's global usage metrics."""
+
+    @property
+    @abc.abstractmethod
+    def user_rate_limit(self) -> datetime.timedelta:
+        """The rule's user rate limit."""
+
+    @property
+    @abc.abstractmethod
+    def channel_rate_limit(self) -> datetime.timedelta:
+        """The rule's channel rate limit."""
+
+    @property
+    @abc.abstractmethod
+    def global_rate_limit(self) -> datetime.timedelta:
+        """The rule's global rate limit."""
+
+    @abc.abstractmethod
+    def is_user_rate_limited(
+        self,
+        nick: Identifier,
+        at_time: Optional[datetime.datetime] = None,
+    ) -> bool:
         """Tell when the rule reached the ``nick``'s rate limit.
 
-        :return: ``True`` when the rule reached the limit, ``False`` otherwise
-        :rtype: bool
+        :param nick: the nick associated with this check
+        :param at_time: optional aware datetime for the rate limit check;
+                        if not given, ``utcnow`` will be used
+        :return: ``True`` when the rule reached the limit, ``False`` otherwise.
         """
-        raise NotImplementedError
 
-    def is_channel_rate_limited(self, channel):
+    @abc.abstractmethod
+    def is_channel_rate_limited(
+        self,
+        channel: Identifier,
+        at_time: Optional[datetime.datetime] = None,
+    ) -> bool:
         """Tell when the rule reached the ``channel``'s rate limit.
 
-        :return: ``True`` when the rule reached the limit, ``False`` otherwise
-        :rtype: bool
+        :param channel: the channel associated with this check
+        :param at_time: optional aware datetime for the rate limit check;
+                        if not given, ``utcnow`` will be used
+        :return: ``True`` when the rule reached the limit, ``False`` otherwise.
         """
-        raise NotImplementedError
 
-    def is_global_rate_limited(self):
-        """Tell when the rule reached the server's rate limit.
+    @abc.abstractmethod
+    def is_global_rate_limited(
+        self,
+        at_time: Optional[datetime.datetime] = None,
+    ) -> bool:
+        """Tell when the rule reached the global rate limit.
 
-        :return: ``True`` when the rule reached the limit, ``False`` otherwise
-        :rtype: bool
+        :param at_time: optional aware datetime for the rate limit check;
+                        if not given, ``utcnow`` will be used
+        :return: ``True`` when the rule reached the limit, ``False`` otherwise.
         """
-        raise NotImplementedError
 
-    def parse(self, text):
+    @property
+    @abc.abstractmethod
+    def user_rate_template(self) -> Optional[str]:
+        """Give the message template to send with a NOTICE to ``nick``.
+
+        :return: A formatted string, or ``None`` if no message is set.
+
+        This property is accessed by the bot when a trigger hits the user rate
+        limit (i.e. for the specificed ``nick``).
+        """
+
+    @property
+    @abc.abstractmethod
+    def channel_rate_template(self) -> Optional[str]:
+        """Give the message template to send with a NOTICE to ``nick``.
+
+        :return: A formatted string, or ``None`` if no message is set.
+
+        This method is called by the bot when a trigger hits the channel rate
+        limit (i.e. for the specified ``channel``).
+        """
+
+    @property
+    @abc.abstractmethod
+    def global_rate_template(self) -> Optional[str]:
+        """Give the message to send with a NOTICE to ``nick``.
+
+        :return: A formatted string, or ``None`` if no message is set.
+
+        This method is called by the bot when a trigger hits the global rate
+        limit (i.e. for any nick/channel).
+        """
+
+    @abc.abstractmethod
+    def parse(self, text) -> Generator:
         """Parse ``text`` and yield matches.
 
         :param str text: text to parse by the rule
         :return: yield a list of match object
         :rtype: generator of `re.match`__
 
-        .. __: https://docs.python.org/3.6/library/re.html#match-objects
+        .. __: https://docs.python.org/3.11/library/re.html#match-objects
         """
-        raise NotImplementedError
 
+    @abc.abstractmethod
     def execute(self, bot, trigger):
         """Execute the triggered rule.
 
@@ -696,7 +866,6 @@ class AbstractRule(object):
 
         This is the method called by the bot when a rule matches a ``trigger``.
         """
-        raise NotImplementedError
 
 
 class Rule(AbstractRule):
@@ -755,14 +924,23 @@ class Rule(AbstractRule):
             'label': getattr(handler, 'rule_label', None),
             'priority': getattr(handler, 'priority', PRIORITY_MEDIUM),
             'events': getattr(handler, 'event', []),
-            'intents': getattr(handler, 'intents', []),
+            'ctcp': getattr(handler, 'ctcp', []),
+            'allow_bots': getattr(handler, 'allow_bots', False),
             'allow_echo': getattr(handler, 'echo', False),
             'threaded': getattr(handler, 'thread', True),
             'output_prefix': getattr(handler, 'output_prefix', ''),
             'unblockable': getattr(handler, 'unblockable', False),
-            'rate_limit': getattr(handler, 'rate', 0),
+            'user_rate_limit': getattr(handler, 'user_rate', 0),
             'channel_rate_limit': getattr(handler, 'channel_rate', 0),
             'global_rate_limit': getattr(handler, 'global_rate', 0),
+            'user_rate_message': getattr(
+                handler, 'user_rate_message', None),
+            'channel_rate_message': getattr(
+                handler, 'channel_rate_message', None),
+            'global_rate_message': getattr(
+                handler, 'global_rate_message', None),
+            'default_rate_message': getattr(
+                handler, 'default_rate_message', None),
             'usages': usages or tuple(),
             'tests': tests,
             'doc': inspect.getdoc(handler),
@@ -844,14 +1022,19 @@ class Rule(AbstractRule):
                  priority=PRIORITY_MEDIUM,
                  handler=None,
                  events=None,
-                 intents=None,
+                 ctcp=None,
+                 allow_bots=False,
                  allow_echo=False,
                  threaded=True,
                  output_prefix=None,
                  unblockable=False,
-                 rate_limit=0,
+                 user_rate_limit=0,
                  channel_rate_limit=0,
                  global_rate_limit=0,
+                 user_rate_message=None,
+                 channel_rate_message=None,
+                 global_rate_message=None,
+                 default_rate_message=None,
                  usages=None,
                  tests=None,
                  doc=None):
@@ -864,7 +1047,8 @@ class Rule(AbstractRule):
 
         # filters
         self._events = events or ['PRIVMSG']
-        self._intents = intents or []
+        self._ctcp = ctcp or []
+        self._allow_bots = bool(allow_bots)
         self._allow_echo = bool(allow_echo)
 
         # execution
@@ -873,14 +1057,18 @@ class Rule(AbstractRule):
 
         # rate limiting
         self._unblockable = bool(unblockable)
-        self._rate_limit = rate_limit
+        self._user_rate_limit = user_rate_limit
         self._channel_rate_limit = channel_rate_limit
         self._global_rate_limit = global_rate_limit
+        self._user_rate_message = user_rate_message
+        self._channel_rate_message = channel_rate_message
+        self._global_rate_message = global_rate_message
+        self._default_rate_message = default_rate_message
 
         # metrics
-        self._metrics_nick = {}
-        self._metrics_sender = {}
-        self._metrics_global = None
+        self._metrics_nick: dict[Identifier, RuleMetrics] = {}
+        self._metrics_sender: dict[Identifier, RuleMetrics] = {}
+        self._metrics_global = RuleMetrics()
 
         # docs & tests
         self._usages = usages or tuple()
@@ -957,8 +1145,12 @@ class Rule(AbstractRule):
 
     def match_preconditions(self, bot, pretrigger):
         event = pretrigger.event
-        intent = pretrigger.tags.get('intent')
+        ctcp_command = pretrigger.ctcp
         nick = pretrigger.nick
+        is_bot_message = (
+            'bot' in pretrigger.tags and
+            event in ["PRIVMSG", "NOTICE"]
+        )
         is_echo_message = (
             nick.lower() == bot.nick.lower() and
             event in ["PRIVMSG", "NOTICE"]
@@ -966,8 +1158,11 @@ class Rule(AbstractRule):
 
         return (
             self.match_event(event) and
-            self.match_intent(intent) and
-            (not is_echo_message or self.allow_echo())
+            self.match_ctcp(ctcp_command) and
+            (
+                (not is_bot_message or self.allow_bots()) or
+                (is_echo_message and self.allow_echo())
+            ) and (not is_echo_message or self.allow_echo())
         )
 
     def parse(self, text):
@@ -976,17 +1171,20 @@ class Rule(AbstractRule):
             if result:
                 yield result
 
-    def match_event(self, event):
+    def match_event(self, event) -> bool:
         return bool(event and event in self._events)
 
-    def match_intent(self, intent):
-        if not self._intents:
+    def match_ctcp(self, command: Optional[str]) -> bool:
+        if not self._ctcp:
             return True
 
-        return bool(intent and any(
-            regex.match(intent)
-            for regex in self._intents
+        return bool(command and any(
+            regex.match(command)
+            for regex in self._ctcp
         ))
+
+    def allow_bots(self):
+        return self._allow_bots
 
     def allow_echo(self):
         return self._allow_echo
@@ -997,64 +1195,93 @@ class Rule(AbstractRule):
     def is_unblockable(self):
         return self._unblockable
 
-    def is_rate_limited(self, nick):
-        metrics = self._metrics_nick.get(nick)
-        if metrics is None:
-            return False
-        last_usage_at, exit_code = metrics
+    def get_user_metrics(self, nick: Identifier) -> RuleMetrics:
+        return self._metrics_nick.get(nick, RuleMetrics())
 
-        if exit_code == IGNORE_RATE_LIMIT:
-            return False
+    def get_channel_metrics(self, channel: Identifier) -> RuleMetrics:
+        return self._metrics_sender.get(channel, RuleMetrics())
 
-        now = datetime.datetime.utcnow()
-        rate_limit = datetime.timedelta(seconds=self._rate_limit)
-        return (now - last_usage_at) <= rate_limit
+    def get_global_metrics(self) -> RuleMetrics:
+        return self._metrics_global
 
-    def is_channel_rate_limited(self, channel):
-        metrics = self._metrics_sender.get(channel)
-        if metrics is None:
-            return False
-        last_usage_at, exit_code = metrics
+    @property
+    def user_rate_limit(self) -> datetime.timedelta:
+        return datetime.timedelta(seconds=self._user_rate_limit)
 
-        if exit_code == IGNORE_RATE_LIMIT:
-            return False
+    @property
+    def channel_rate_limit(self) -> datetime.timedelta:
+        return datetime.timedelta(seconds=self._channel_rate_limit)
 
-        now = datetime.datetime.utcnow()
-        rate_limit = datetime.timedelta(seconds=self._channel_rate_limit)
-        return (now - last_usage_at) <= rate_limit
+    @property
+    def global_rate_limit(self) -> datetime.timedelta:
+        return datetime.timedelta(seconds=self._global_rate_limit)
 
-    def is_global_rate_limited(self):
-        metrics = self._metrics_global
-        if metrics is None:
-            return False
-        last_usage_at, exit_code = metrics
+    def is_user_rate_limited(
+        self,
+        nick: Identifier,
+        at_time: Optional[datetime.datetime] = None,
+    ) -> bool:
+        if at_time is None:
+            at_time = datetime.datetime.now(datetime.timezone.utc)
+        metrics = self.get_user_metrics(nick)
+        return metrics.is_limited(at_time - self.user_rate_limit)
 
-        if exit_code == IGNORE_RATE_LIMIT:
-            return False
+    def is_channel_rate_limited(
+        self,
+        channel: Identifier,
+        at_time: Optional[datetime.datetime] = None,
+    ) -> bool:
+        if at_time is None:
+            at_time = datetime.datetime.now(datetime.timezone.utc)
+        metrics = self.get_channel_metrics(channel)
+        return metrics.is_limited(at_time - self.channel_rate_limit)
 
-        now = datetime.datetime.utcnow()
-        rate_limit = datetime.timedelta(seconds=self._global_rate_limit)
-        return (now - last_usage_at) <= rate_limit
+    def is_global_rate_limited(
+        self,
+        at_time: Optional[datetime.datetime] = None,
+    ) -> bool:
+        if at_time is None:
+            at_time = datetime.datetime.now(datetime.timezone.utc)
+        metrics = self.get_global_metrics()
+        return metrics.is_limited(at_time - self.global_rate_limit)
+
+    @property
+    def user_rate_template(self) -> Optional[str]:
+        template = self._user_rate_message or self._default_rate_message
+        return template
+
+    @property
+    def channel_rate_template(self) -> Optional[str]:
+        template = self._channel_rate_message or self._default_rate_message
+        return template
+
+    @property
+    def global_rate_template(self) -> Optional[str]:
+        template = self._global_rate_message or self._default_rate_message
+        return template
 
     def execute(self, bot, trigger):
         if not self._handler:
             raise RuntimeError('Improperly configured rule: no handler')
 
-        # execute the handler
-        exit_code = self._handler(bot, trigger)
+        user_metrics: RuleMetrics = self._metrics_nick.setdefault(
+            trigger.nick, RuleMetrics())
+        sender_metrics: RuleMetrics = self._metrics_sender.setdefault(
+            trigger.sender, RuleMetrics())
 
-        # register metrics
-        now = datetime.datetime.utcnow()
-        self._metrics_nick[trigger.nick] = (now, exit_code)
-        self._metrics_sender[trigger.sender] = (now, exit_code)
-        self._metrics_global = (now, exit_code)
+        # execute the handler
+        with user_metrics, sender_metrics, self._metrics_global:
+            exit_code = self._handler(bot, trigger)
+            user_metrics.set_return_value(exit_code)
+            sender_metrics.set_return_value(exit_code)
+            self._metrics_global.set_return_value(exit_code)
 
         # return exit code
         return exit_code
 
 
-class NamedRuleMixin(object):
-    """Mixin for named rules.
+class AbstractNamedRule(Rule):
+    """Abstract base class for named rules.
 
     A named rule is invoked by using a specific word, and is usually known
     as a "command". For example, the command "hello" is triggered by using
@@ -1062,6 +1289,11 @@ class NamedRuleMixin(object):
 
     A named rule can be invoked by using one of its aliases, also.
     """
+    def __init__(self, name, aliases=None, **kwargs):
+        super().__init__([], **kwargs)
+        self._name = name
+        self._aliases = tuple(aliases) if aliases is not None else tuple()
+
     @property
     def name(self):
         return self._name
@@ -1088,43 +1320,15 @@ class NamedRuleMixin(object):
         """
         return name in self._aliases
 
-    def escape_name(self, name):
-        """Escape the provided name if needed.
+    @abc.abstractmethod
+    def get_rule_regex(self):
+        """Make the rule regex for this named rule.
 
-        .. note::
-
-            Until now, Sopel has allowed command name to be regex pattern.
-            It was mentioned in the documentation without much details, and
-            there were no tests for it.
-
-            In order to ensure backward compatibility with previous versions of
-            Sopel, we make sure to escape command name only when it's needed.
-
-            **It is not recommended to use a regex pattern for your command
-            name. This feature will be removed in Sopel 8.0.**
-
+        :return: a compiled regex for this named rule and its aliases
         """
-        if set('.^$*+?{}[]\\|()') & set(name):
-            # the name contains a regex pattern special character
-            # we assume the user knows what they are doing
-            try:
-                # make sure it compiles properly
-                # (nobody knows what they are doing)
-                re.compile(name)
-            except re.error as error:
-                original_name = name
-                name = re.escape(name)
-                LOGGER.warning(
-                    'Command name "%s" is an invalid regular expression '
-                    'and will be replaced by "%s": %s',
-                    original_name, name, error)
-        else:
-            name = re.escape(name)
-
-        return name
 
 
-class Command(NamedRuleMixin, Rule):
+class Command(AbstractNamedRule):
     """Command rule definition.
 
     A command rule (or simply "a command") is a named rule, i.e. it has a known
@@ -1186,11 +1390,9 @@ class Command(NamedRuleMixin, Rule):
                  help_prefix=COMMAND_DEFAULT_HELP_PREFIX,
                  aliases=None,
                  **kwargs):
-        super(Command, self).__init__([], **kwargs)
-        self._name = name
+        super().__init__(name, aliases=aliases, **kwargs)
         self._prefix = prefix
         self._help_prefix = help_prefix
-        self._aliases = tuple(aliases) if aliases is not None else tuple()
         self._regexes = (self.get_rule_regex(),)
 
     def __str__(self):
@@ -1237,8 +1439,8 @@ class Command(NamedRuleMixin, Rule):
 
         to create a compiled regex to return.
         """
-        name = [self.escape_name(self._name)]
-        aliases = [self.escape_name(alias) for alias in self._aliases]
+        name = [re.escape(self._name)]
+        aliases = [re.escape(alias) for alias in self._aliases]
         pattern = r'|'.join(name + aliases)
 
         # Escape all whitespace with a single backslash.
@@ -1249,7 +1451,7 @@ class Command(NamedRuleMixin, Rule):
         return re.compile(pattern, re.IGNORECASE | re.VERBOSE)
 
 
-class NickCommand(NamedRuleMixin, Rule):
+class NickCommand(AbstractNamedRule):
     """Nickname Command rule definition.
 
     A nickname command rule is a named rule with a twist: instead of a prefix,
@@ -1309,13 +1511,11 @@ class NickCommand(NamedRuleMixin, Rule):
         return cls(**kwargs)
 
     def __init__(self, nick, name, nick_aliases=None, aliases=None, **kwargs):
-        super(NickCommand, self).__init__([], **kwargs)
+        super().__init__(name, aliases=aliases, **kwargs)
         self._nick = nick
-        self._name = name
         self._nick_aliases = (tuple(nick_aliases)
                               if nick_aliases is not None
                               else tuple())
-        self._aliases = tuple(aliases) if aliases is not None else tuple()
         self._regexes = (self.get_rule_regex(),)
 
     def __str__(self):
@@ -1361,8 +1561,8 @@ class NickCommand(NamedRuleMixin, Rule):
 
         to create a compiled regex to return.
         """
-        name = [self.escape_name(self._name)]
-        aliases = [self.escape_name(alias) for alias in self._aliases]
+        name = [re.escape(self._name)]
+        aliases = [re.escape(alias) for alias in self._aliases]
         pattern = r'|'.join(name + aliases)
 
         return _compile_pattern(
@@ -1371,11 +1571,11 @@ class NickCommand(NamedRuleMixin, Rule):
             self._nick_aliases)
 
 
-class ActionCommand(NamedRuleMixin, Rule):
+class ActionCommand(AbstractNamedRule):
     """Action Command rule definition.
 
     An action command rule is a named rule that can be triggered only when the
-    trigger's intent is an ``ACTION``. Like the :class:`Command` rule, it
+    trigger's CTCP command is an ``ACTION``. Like the :class:`Command` rule, it
     allows command aliases.
 
     Here is an example with the ``dummy`` action command:
@@ -1389,7 +1589,7 @@ class ActionCommand(NamedRuleMixin, Rule):
 
     Apart from that, it behaves exactly like a :class:`generic rule <Rule>`.
     """
-    INTENT_REGEX = re.compile(r'ACTION', re.IGNORECASE)
+    CTCP_REGEX = re.compile(r'ACTION', re.IGNORECASE)
     PATTERN_TEMPLATE = r"""
         ({command})         # Command as group 1.
         (?:\s+              # Whitespace to end command.
@@ -1424,9 +1624,7 @@ class ActionCommand(NamedRuleMixin, Rule):
         return cls(**kwargs)
 
     def __init__(self, name, aliases=None, **kwargs):
-        super(ActionCommand, self).__init__([], **kwargs)
-        self._name = name
-        self._aliases = tuple(aliases) if aliases is not None else tuple()
+        super().__init__(name, aliases=aliases, **kwargs)
         self._regexes = (self.get_rule_regex(),)
 
     def __str__(self):
@@ -1448,21 +1646,20 @@ class ActionCommand(NamedRuleMixin, Rule):
 
         to create a compiled regex to return.
         """
-        name = [self.escape_name(self._name)]
-        aliases = [self.escape_name(alias) for alias in self._aliases]
+        name = [re.escape(self._name)]
+        aliases = [re.escape(alias) for alias in self._aliases]
         pattern = r'|'.join(name + aliases)
         pattern = self.PATTERN_TEMPLATE.format(command=pattern)
         return re.compile(pattern, re.IGNORECASE | re.VERBOSE)
 
-    def match_intent(self, intent):
-        """Tell if ``intent`` is an ``ACTION``.
+    def match_ctcp(self, command: Optional[str]) -> bool:
+        """Tell if ``command`` is an ``ACTION``.
 
-        :param str intent: potential matching intent
-        :return: ``True`` when ``intent`` matches ``ACTION``,
+        :param command: potential matching CTCP command
+        :return: ``True`` when ``command`` matches ``ACTION``,
                  ``False`` otherwise
-        :rtype: bool
         """
-        return bool(intent and self.INTENT_REGEX.match(intent))
+        return bool(command and self.CTCP_REGEX.match(command))
 
 
 class FindRule(Rule):
@@ -1575,7 +1772,6 @@ class URLCallback(Rule):
 
     @classmethod
     def from_callable(cls, settings, handler):
-        execute_handler = handler
         regexes = cls.regex_from_callable(settings, handler)
         kwargs = cls.kwargs_from_callable(handler)
 
@@ -1587,12 +1783,18 @@ class URLCallback(Rule):
             # account for the 'self' parameter when the handler is a method
             match_count = 4
 
+        execute_handler = handler
         argspec = inspect.getfullargspec(handler)
 
         if len(argspec.args) >= match_count:
             @functools.wraps(handler)
-            def execute_handler(bot, trigger):
+            def handler_match_wrapper(bot, trigger):
                 return handler(bot, trigger, match=trigger)
+
+            # don't directly `def execute_handler` to override it;
+            # doing incurs the wrath of pyflakes in the form of
+            # "F811: Redefinition of unused name"
+            execute_handler = handler_match_wrapper
 
         kwargs.update({
             'handler': execute_handler,
@@ -1639,7 +1841,7 @@ class URLCallback(Rule):
                  regexes,
                  schemes=None,
                  **kwargs):
-        super(URLCallback, self).__init__(regexes, **kwargs)
+        super().__init__(regexes, **kwargs)
         # prevent mutability of registered schemes
         self._schemes = tuple(schemes or URL_DEFAULT_SCHEMES)
 

@@ -1,8 +1,9 @@
 """Tests for core ``sopel.irc.backends``"""
-from __future__ import generator_stop
+from __future__ import annotations
 
+import pytest
 
-from sopel.irc.abstract_backends import AbstractIRCBackend
+from sopel.irc.isupport import ISupport
 from sopel.tests.mocks import MockIRCBackend
 
 
@@ -15,7 +16,7 @@ class BotCollector:
 
 
 def test_prepare_command():
-    backend = AbstractIRCBackend(BotCollector())
+    backend = MockIRCBackend(BotCollector())
 
     result = backend.prepare_command('INFO')
     assert result == 'INFO\r\n'
@@ -25,7 +26,7 @@ def test_prepare_command():
 
 
 def test_prepare_command_text():
-    backend = AbstractIRCBackend(BotCollector())
+    backend = MockIRCBackend(BotCollector())
 
     result = backend.prepare_command('PRIVMSG', '#sopel', text='Hello world!')
     assert result == 'PRIVMSG #sopel :Hello world!\r\n'
@@ -38,13 +39,40 @@ def test_prepare_command_text():
 
 
 def test_prepare_command_text_too_long():
-    backend = AbstractIRCBackend(BotCollector())
+    backend = MockIRCBackend(BotCollector())
 
     max_length = 510 - len('PRIVMSG #sopel :')
     text = '-' * (max_length + 1)  # going above max length by one
     expected = 'PRIVMSG #sopel :%s\r\n' % text[:max_length]
     result = backend.prepare_command('PRIVMSG', '#sopel', text=text)
     assert result == expected
+
+
+def test_prepare_command_command_safe():
+    backend = MockIRCBackend(BotCollector())
+
+    result = backend.prepare_command(
+        "PRIVMSG\r\nMODE #sopel +o Mallory\r\nPRIVMSG", "#sopel", text="Hello"
+    )
+    assert result == "PRIVMSGMODE #sopel +o MalloryPRIVMSG #sopel :Hello\r\n"
+
+
+def test_prepare_command_target_safe():
+    backend = MockIRCBackend(BotCollector())
+
+    result = backend.prepare_command(
+        "PRIVMSG", "#sopel\r\nMODE #sopel +o Mallory\r\nPRIVMSG #sopel", text="Hello"
+    )
+    assert result == "PRIVMSG #sopelMODE #sopel +o MalloryPRIVMSG #sopel :Hello\r\n"
+
+
+def test_prepare_command_text_safe():
+    backend = MockIRCBackend(BotCollector())
+
+    result = backend.prepare_command(
+        "PRIVMSG", "#sopel", text="Hello\r\nMODE #sopel +o Mallory"
+    )
+    assert result == "PRIVMSG #sopel :HelloMODE #sopel +o Mallory\r\n"
 
 
 def test_send_command():
@@ -299,3 +327,40 @@ def test_send_notice_safe():
     expected = 'NOTICE #sopel :Helloworld!\r\n'
     assert backend.message_sent == [expected.encode('utf-8')]
     assert bot.message_sent == [expected]
+
+
+def test_decode_line_utf8():
+    bot = BotCollector()
+    bot.isupport = ISupport()
+    backend = MockIRCBackend(bot)
+
+    test = "PRIVMSG #sopel :Hello, Martín!"
+    assert backend.decode_line(test.encode("utf-8")) == test
+
+
+def test_decode_line_utf8only():
+    bot = BotCollector()
+    bot.isupport = ISupport(UTF8ONLY=None)
+    backend = MockIRCBackend(bot)
+
+    test = "PRIVMSG #sopel :Hello, Martín!"
+    with pytest.raises(UnicodeDecodeError):
+        backend.decode_line(test.encode("cp1252"))
+
+
+def test_decode_line_nonsense():
+    bot = BotCollector()
+    bot.isupport = ISupport()
+    backend = MockIRCBackend(bot)
+
+    with pytest.raises(ValueError):
+        backend.decode_line(bytes(range(256)))
+
+
+def test_decode_line_cp1252():
+    bot = BotCollector()
+    bot.isupport = ISupport()
+    backend = MockIRCBackend(bot)
+
+    test = "PRIVMSG #sopel :Hello, Martín!"
+    assert backend.decode_line(test.encode("cp1252")) == test

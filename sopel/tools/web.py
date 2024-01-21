@@ -3,11 +3,6 @@ The ``tools.web`` package contains utility functions for interaction with web
 applications, APIs, or websites in your plugins.
 
 .. versionadded:: 7.0
-
-.. note::
-    Some parts of this module will remain accessible through ``sopel.web`` as
-    well until its final removal in Sopel 8. This is for backward
-    compatibility only; please update old code as soon as possible.
 """
 # Copyright © 2008, Sean B. Palmer, inamidst.com
 # Copyright © 2009, Michael Yanovich <yanovich.1@osu.edu>
@@ -16,14 +11,16 @@ applications, APIs, or websites in your plugins.
 # Copyright © 2019, dgw, technobabbl.es
 # Licensed under the Eiffel Forum License 2.
 
-from __future__ import generator_stop
+from __future__ import annotations
 
+import html
 from html.entities import name2codepoint
 import re
 import urllib
 from urllib.parse import urlparse, urlunparse
 
 from sopel import __version__
+from sopel.lifecycle import deprecated
 
 
 __all__ = [
@@ -85,9 +82,19 @@ Use it like this::
 
 
 r_entity = re.compile(r'&([^;\s]+);')
-"""Regular expression to match HTML entities."""
+"""Regular expression to match HTML entities.
+
+.. deprecated:: 8.0
+
+    Will be removed in Sopel 9, along with :func:`entity`.
+"""
 
 
+@deprecated(
+    version='8.0',
+    removed_in='9.0',
+    reason="No longer needed now that Python 3.4+ has `html.unescape()`",
+)
 def entity(match):
     """Convert an entity reference to the appropriate character.
 
@@ -96,6 +103,12 @@ def entity(match):
     :return str: the Unicode character corresponding to the given ``match``
         string, or a fallback representation if the reference cannot be
         resolved to a character
+
+    .. deprecated:: 8.0
+
+        Will be removed in Sopel 9. Use :func:`decode` directly or migrate to
+        Python's standard-library equivalent, :func:`html.unescape`.
+
     """
     value = match.group(1).lower()
     if value.startswith('#x'):
@@ -107,13 +120,20 @@ def entity(match):
     return '[' + value + ']'
 
 
-def decode(html):
+def decode(text):
     """Decode HTML entities into Unicode text.
 
-    :param str html: the HTML page or snippet to process
-    :return str: ``html`` with all entity references replaced
+    :param str text: the HTML page or snippet to process
+    :return str: ``text`` with all entity references replaced
+
+    .. versionchanged:: 8.0
+
+        Renamed ``html`` parameter to ``text``. (Python gained a standard
+        library module named :mod:`html` in version 3.4.)
+
     """
-    return r_entity.sub(entity, html)
+    # TODO deprecated?
+    return html.unescape(text)
 
 
 def quote(string, safe='/'):
@@ -162,7 +182,7 @@ def quote_query(string):
 
 def urlencode_non_ascii(b):
     """Safely encodes non-ASCII characters in a URL."""
-    return re.sub(b'[\x80-\xFF]', lambda c: '%%%02x' % ord(c.group(0)), b)
+    return re.sub(b'[\x80-\xFF]', lambda c: b'%%%02x' % ord(c.group(0)), b)
 
 
 def iri_to_uri(iri):
@@ -239,7 +259,7 @@ def search_urls(text, exclusion_char=None, clean=False, schemes=None):
 
     urls = re.findall(r, text)
     if clean:
-        urls = (trim_url(url) for url in urls)
+        urls = [trim_url(url) for url in urls]
 
     # yield unique URLs in their order of appearance
     seen = set()

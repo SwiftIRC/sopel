@@ -1,18 +1,38 @@
-from __future__ import generator_stop
+"""Sopel database module: management and tools around Sopel's datamodel.
+
+This module defines a datamodel, using `SQLAlchemy ORM's mapping`__:
+
+* :class:`NickIDs` and :class:`Nicknames` are used to track users
+* :class:`NickValues` is used to store arbitrary values for users
+* :class:`ChannelValues` is used to store arbitrary values for channels
+* :class:`PluginValues` is used to store arbitrary values for plugins
+
+These models are made available through the :class:`SopelDB` class and its
+convenience methods, such as :meth:`~SopelDB.get_nick_value` or
+:meth:`~SopelDB.get_channel_value`.
+
+.. __: https://docs.sqlalchemy.org/en/14/orm/tutorial.html#declare-a-mapping
+"""
+from __future__ import annotations
 
 import errno
 import json
 import logging
 import os.path
 import traceback
+import typing
 
 from sqlalchemy import Column, create_engine, ForeignKey, Integer, String
 from sqlalchemy.engine.url import make_url, URL
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
+from sqlalchemy.sql import delete, func, select, update
 
-from sopel.tools import Identifier
+from sopel.lifecycle import deprecated
+from sopel.tools.identifiers import Identifier, IdentifierFactory
+
+if typing.TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 LOGGER = logging.getLogger(__name__)
@@ -81,15 +101,18 @@ class PluginValues(BASE):
     value = Column(String(255))
 
 
-class SopelDB(object):
+class SopelDB:
     """Database object class.
 
     :param config: Sopel's configuration settings
     :type config: :class:`sopel.config.Config`
+    :param identifier_factory: factory for
+                               :class:`~sopel.tools.identifiers.Identifier`
+    :type: Callable[[:class:`str`], :class:`str`]
 
     This defines a simplified interface for basic, common operations on the
-    bot's database. Direct access to the database is also available, to serve
-    more complex plugins' needs.
+    bot's database. Direct access to the database is also available through
+    its :attr:`engine` attribute, to serve more complex plugins' needs.
 
     When configured to use SQLite with a relative filename, the file is assumed
     to be in the directory named by the core setting ``homedir``.
@@ -103,9 +126,27 @@ class SopelDB(object):
         of database they use (especially on high-load Sopel instances, which may
         run up against SQLite's concurrent-access limitations).
 
+    .. versionchanged:: 8.0
+
+        An Identifier factory can be provided that will be used to instantiate
+        :class:`~sopel.tools.identifiers.Identifier` when dealing with Nick or
+        Channel names.
+
+    .. seealso::
+
+        For any advanced usage of the ORM, refer to the
+        `SQLAlchemy documentation`__.
+
+    .. __: https://docs.sqlalchemy.org/en/14/
     """
 
-    def __init__(self, config):
+    def __init__(
+        self,
+        config,
+        identifier_factory: IdentifierFactory = Identifier,
+    ) -> None:
+        self.make_identifier: IdentifierFactory = identifier_factory
+
         if config.core.db_url is not None:
             self.url = make_url(config.core.db_url)
 
@@ -116,7 +157,6 @@ class SopelDB(object):
             self.type = self.url.drivername.split('+', 1)[0]
         elif config.core.db_type == 'sqlite':
             self.type = 'sqlite'
-            drivername = config.core.db_driver or 'sqlite'
             path = config.core.db_filename
             if path is None:
                 path = os.path.join(config.core.homedir, config.basename + '.db')
@@ -168,6 +208,29 @@ class SopelDB(object):
                            database=db_name, query=query)
 
         self.engine = create_engine(self.url, pool_recycle=3600)
+        """SQLAlchemy Engine used to connect to Sopel's database.
+
+        .. seealso::
+
+            Read `SQLAlchemy engine`__'s documentation to know how to use it.
+
+        .. __: https://docs.sqlalchemy.org/en/14/core/connections.html
+
+        .. important::
+
+            Introduced in Sopel 7, Sopel uses SQLAlchemy 1.4+. This version of
+            SQLAlchemy deprecates various behaviors and methods, to prepare the
+            migration to its future 2.0 version, and the new 2.x style.
+
+            Sopel doesn't enforce the new 2.x style yet. This will be modified
+            in Sopel 9 by using the ``future=True`` flag on the engine.
+
+            You can read more about the `migration guide from 1.x to 2.x`__, as
+            Sopel will ensure in a future version that it is compatible with
+            the new style.
+
+        .. __: https://docs.sqlalchemy.org/en/14/changelog/migration_20.html
+        """
 
         # Catch any errors connecting to database
         try:
@@ -179,7 +242,8 @@ class SopelDB(object):
         # Create our tables
         BASE.metadata.create_all(self.engine)
 
-        self.ssession = scoped_session(sessionmaker(bind=self.engine))
+        self.ssession = scoped_session(
+            sessionmaker(bind=self.engine, future=True))
 
     def connect(self):
         """Get a direct database connection.
@@ -233,18 +297,46 @@ class SopelDB(object):
         """
         return self.ssession()
 
+    @deprecated('Use SopelDB.engine directly', version='8.0', removed_in='9.0')
     def execute(self, *args, **kwargs):
         """Execute an arbitrary SQL query against the database.
 
         :return: the query results
-        :rtype: :class:`sqlalchemy.engine.ResultProxy`
+        :rtype: :class:`sqlalchemy.engine.Result`
 
-        The ``ResultProxy`` object returned is a wrapper around a ``Cursor``
-        object as specified by PEP 249.
+        The ``Result`` object returned is a wrapper around a ``Cursor`` object
+        as specified by :pep:`249`.
+
+        .. deprecated:: 8.0
+
+            This method will be removed in Sopel 9, following the deprecation
+            of SQLAlchemy's :meth:`sqlalchemy.engine.Engine.execute`.
+
+            To perform a raw SQL query, use the :class:`~SopelDB.engine`
+            attribute as per the migration guide from SQLAlchemy::
+
+                from sqlalchemy.sql import text
+
+                def my_command(bot, trigger):
+                    raw_sql = ' ... '  # your raw SQL
+                    # get a connection as a context manager
+                    with bot.db.engine.connect() as conn:
+                        res = conn.execute(text(raw_sql))
+                        data = res.fetchall()
+
+                    # do something with your data here
+
+        .. seealso::
+
+            Read the `migration guide from 1.x style to 2.x style`__ by
+            SQLAlchemy to learn more about using SQLALchemy's engine and
+            connection.
+
+        .. __: https://docs.sqlalchemy.org/en/14/changelog/migration_20.html
         """
         return self.engine.execute(*args, **kwargs)
 
-    def get_uri(self):
+    def get_uri(self) -> URL:
         """Return a direct URL for the database.
 
         :return: the database connection URI
@@ -257,12 +349,12 @@ class SopelDB(object):
 
     # NICK FUNCTIONS
 
-    def get_nick_id(self, nick, create=True):
+    def get_nick_id(self, nick: str, create: bool = False) -> int:
         """Return the internal identifier for a given nick.
 
         :param nick: the nickname for which to fetch an ID
-        :type nick: :class:`~sopel.tools.Identifier`
-        :param bool create: whether to create an ID if one does not exist
+        :param create: whether to create an ID if one does not exist
+                       (set to ``False`` by default)
         :raise ValueError: if no ID exists for the given ``nick`` and ``create``
                            is set to ``False``
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
@@ -270,25 +362,30 @@ class SopelDB(object):
         The nick ID is shared across all of a user's aliases, assuming their
         nicks have been grouped together.
 
+        .. versionchanged:: 8.0
+
+            The ``create`` parameter is now ``False`` by default.
+
         .. seealso::
 
             Alias/group management functions: :meth:`alias_nick`,
             :meth:`unalias_nick`, :meth:`merge_nick_groups`, and
-            :meth:`delete_nick_group`.
+            :meth:`forget_nick_group`.
 
         """
-        session = self.ssession()
-        slug = nick.lower()
-        try:
-            nickname = session.query(Nicknames) \
-                .filter(Nicknames.slug == slug) \
-                .one_or_none()
+        slug = self.make_identifier(nick).lower()
+        with self.session() as session:
+            nickname = session.execute(
+                select(Nicknames).where(Nicknames.slug == slug)
+            ).scalar_one_or_none()
 
             if nickname is None:
                 # see if it needs case-mapping migration
-                nickname = session.query(Nicknames) \
-                    .filter(Nicknames.slug == Identifier._lower_swapped(nick)) \
-                    .one_or_none()
+                nickname = session.execute(
+                    select(Nicknames)
+                    .where(Nicknames.slug == Identifier._lower_swapped(nick))
+                ).scalar_one_or_none()
+
                 if nickname is not None:
                     # it does!
                     nickname.slug = slug
@@ -303,21 +400,20 @@ class SopelDB(object):
                 session.commit()
 
                 # Create a new Nickname
-                nickname = Nicknames(nick_id=nick_id.nick_id, slug=slug, canonical=nick)
+                nickname = Nicknames(
+                    nick_id=nick_id.nick_id,
+                    slug=slug,
+                    canonical=nick,
+                )
                 session.add(nickname)
                 session.commit()
             return nickname.nick_id
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def alias_nick(self, nick, alias):
+    def alias_nick(self, nick: str, alias: str) -> None:
         """Create an alias for a nick.
 
-        :param str nick: an existing nickname
-        :param str alias: an alias by which ``nick`` should also be known
+        :param nick: an existing nickname
+        :param alias: an alias by which ``nick`` should also be known
         :raise ValueError: if the ``alias`` already exists
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
@@ -329,32 +425,30 @@ class SopelDB(object):
             :meth:`unalias_nick`.
 
         """
-        nick = Identifier(nick)
-        alias = Identifier(alias)
-        nick_id = self.get_nick_id(nick)
-        session = self.ssession()
-        try:
-            result = session.query(Nicknames) \
-                .filter(Nicknames.slug == alias.lower()) \
-                .filter(Nicknames.canonical == alias) \
-                .one_or_none()
+        slug = self.make_identifier(alias).lower()
+        nick_id = self.get_nick_id(nick, create=True)
+        with self.session() as session:
+            result = session.execute(
+                select(Nicknames)
+                .where(Nicknames.slug == slug)
+                .where(Nicknames.canonical == alias)
+            ).scalar_one_or_none()
             if result:
                 raise ValueError('Alias already exists.')
-            nickname = Nicknames(nick_id=nick_id, slug=alias.lower(), canonical=alias)
+            nickname = Nicknames(
+                nick_id=nick_id,
+                slug=slug,
+                canonical=alias,
+            )
             session.add(nickname)
             session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def set_nick_value(self, nick, key, value):
+    def set_nick_value(self, nick: str, key: str, value: typing.Any) -> None:
         """Set or update a value in the key-value store for ``nick``.
 
-        :param str nick: the nickname with which to associate the ``value``
-        :param str key: the name by which this ``value`` may be accessed later
-        :param mixed value: the value to set for this ``key`` under ``nick``
+        :param nick: the nickname with which to associate the ``value``
+        :param key: the name by which this ``value`` may be accessed later
+        :param value: the value to set for this ``key`` under ``nick``
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         The ``value`` can be any of a range of types; it need not be a string.
@@ -370,35 +464,34 @@ class SopelDB(object):
             :meth:`delete_nick_value`.
 
         """
-        nick = Identifier(nick)
         value = json.dumps(value, ensure_ascii=False)
-        nick_id = self.get_nick_id(nick)
-        session = self.ssession()
-        try:
-            result = session.query(NickValues) \
-                .filter(NickValues.nick_id == nick_id) \
-                .filter(NickValues.key == key) \
-                .one_or_none()
+        nick_id = self.get_nick_id(nick, create=True)
+        with self.session() as session:
+            result = session.execute(
+                select(NickValues)
+                .where(NickValues.nick_id == nick_id)
+                .where(NickValues.key == key)
+            ).scalar_one_or_none()
+
             # NickValue exists, update
             if result:
                 result.value = value
                 session.commit()
             # DNE - Insert
             else:
-                new_nickvalue = NickValues(nick_id=nick_id, key=key, value=value)
+                new_nickvalue = NickValues(
+                    nick_id=nick_id,
+                    key=key,
+                    value=value,
+                )
                 session.add(new_nickvalue)
                 session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def delete_nick_value(self, nick, key):
+    def delete_nick_value(self, nick: str, key: str) -> None:
         """Delete a value from the key-value store for ``nick``.
 
-        :param str nick: the nickname whose values to modify
-        :param str key: the name of the value to delete
+        :param nick: the nickname whose values to modify
+        :param key: the name of the value to delete
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. seealso::
@@ -409,31 +502,35 @@ class SopelDB(object):
             :meth:`get_nick_value`.
 
         """
-        nick = Identifier(nick)
-        nick_id = self.get_nick_id(nick)
-        session = self.ssession()
         try:
-            result = session.query(NickValues) \
-                .filter(NickValues.nick_id == nick_id) \
-                .filter(NickValues.key == key) \
-                .one_or_none()
+            nick_id = self.get_nick_id(nick)
+        except ValueError:
+            # there's nothing to do if the nick doesn't exist
+            return
+
+        with self.session() as session:
+            result = session.execute(
+                select(NickValues)
+                .where(NickValues.nick_id == nick_id)
+                .where(NickValues.key == key)
+            ).scalar_one_or_none()
             # NickValue exists, delete
             if result:
                 session.delete(result)
                 session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def get_nick_value(self, nick, key, default=None):
+    def get_nick_value(
+        self,
+        nick: str,
+        key: str,
+        default: typing.Optional[typing.Any] = None
+    ) -> typing.Optional[typing.Any]:
         """Get a value from the key-value store for ``nick``.
 
-        :param str nick: the nickname whose values to access
-        :param str key: the name by which the desired value was saved
-        :param mixed default: value to return if ``key`` does not have a value
-                              set (optional)
+        :param nick: the nickname whose values to access
+        :param key: the name by which the desired value was saved
+        :param default: value to return if ``key`` does not have a value set
+                        (optional)
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. versionadded:: 7.0
@@ -449,60 +546,58 @@ class SopelDB(object):
             :meth:`delete_nick_value`.
 
         """
-        nick = Identifier(nick)
-        session = self.ssession()
-        try:
-            result = session.query(NickValues) \
-                .filter(Nicknames.nick_id == NickValues.nick_id) \
-                .filter(Nicknames.slug == nick.lower()) \
-                .filter(NickValues.key == key) \
-                .one_or_none()
+        slug = self.make_identifier(nick).lower()
+        with self.session() as session:
+            result = session.execute(
+                select(NickValues)
+                .where(Nicknames.nick_id == NickValues.nick_id)
+                .where(Nicknames.slug == slug)
+                .where(NickValues.key == key)
+            ).scalar_one_or_none()
+
             if result is not None:
                 result = result.value
             elif default is not None:
                 result = default
-            return _deserialize(result)
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def unalias_nick(self, alias):
+            return _deserialize(result)
+
+    def unalias_nick(self, alias: str) -> None:
         """Remove an alias.
 
-        :param str alias: an alias with at least one other nick in its group
-        :raise ValueError: if there is not at least one other nick in the group
+        :param alias: an alias with at least one other nick in its group
+        :raise ValueError: if there is not at least one other nick in the
+                           group, or the ``alias`` is not known
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. seealso::
 
-            To delete an entire group, use :meth:`delete_nick_group`.
+            To delete an entire group, use :meth:`forget_nick_group`.
 
             To *add* an alias for a nick, use :meth:`alias_nick`.
 
         """
-        alias = Identifier(alias)
-        nick_id = self.get_nick_id(alias, False)
-        session = self.ssession()
-        try:
-            count = session.query(Nicknames) \
-                .filter(Nicknames.nick_id == nick_id) \
-                .count()
+        slug = self.make_identifier(alias).lower()
+        nick_id = self.get_nick_id(alias)
+        with self.session() as session:
+            count = session.scalar(
+                select(func.count()).select_from(Nicknames)
+                .where(Nicknames.nick_id == nick_id)
+            )
             if count <= 1:
                 raise ValueError('Given alias is the only entry in its group.')
-            session.query(Nicknames).filter(Nicknames.slug == alias.lower()).delete()
+            session.execute(
+                delete(Nicknames)
+                .where(Nicknames.slug == slug)
+                .execution_options(synchronize_session="fetch")
+            )
             session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def delete_nick_group(self, nick):
+    def forget_nick_group(self, nick: str) -> None:
         """Remove a nickname, all of its aliases, and all of its stored values.
 
-        :param str nick: one of the nicknames in the group to be deleted
+        :param nick: one of the nicknames in the group to be deleted
+        :raise ValueError: if the ``nick`` does not exist in the database
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. important::
@@ -511,24 +606,33 @@ class SopelDB(object):
             you want to do this.
 
         """
-        nick = Identifier(nick)
-        nick_id = self.get_nick_id(nick, False)
-        session = self.ssession()
-        try:
-            session.query(Nicknames).filter(Nicknames.nick_id == nick_id).delete()
-            session.query(NickValues).filter(NickValues.nick_id == nick_id).delete()
+        nick_id = self.get_nick_id(nick)
+        with self.session() as session:
+            session.execute(
+                delete(Nicknames)
+                .where(Nicknames.nick_id == nick_id)
+                .execution_options(synchronize_session="fetch")
+            )
+            session.execute(
+                delete(NickValues)
+                .where(NickValues.nick_id == nick_id)
+                .execution_options(synchronize_session="fetch")
+            )
             session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def merge_nick_groups(self, first_nick, second_nick):
+    @deprecated(
+        version='8.0',
+        removed_in='9.0',
+        reason="Renamed to `forget_nick_group`",
+    )
+    def delete_nick_group(self, nick: str) -> None:  # pragma: nocover
+        self.forget_nick_group(nick)
+
+    def merge_nick_groups(self, first_nick: str, second_nick: str):
         """Merge two nick groups.
 
-        :param str first_nick: one nick in the first group to merge
-        :param str second_nick: one nick in the second group to merge
+        :param first_nick: one nick in the first group to merge
+        :param second_nick: one nick in the second group to merge
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         Takes two nicks, which may or may not be registered. Unregistered nicks
@@ -544,77 +648,77 @@ class SopelDB(object):
         Plugins which define their own tables relying on the nick table will
         need to handle their own merging separately.
         """
-        first_id = self.get_nick_id(Identifier(first_nick))
-        second_id = self.get_nick_id(Identifier(second_nick))
-        session = self.ssession()
-        try:
+        first_id = self.get_nick_id(first_nick, create=True)
+        second_id = self.get_nick_id(second_nick, create=True)
+        with self.session() as session:
             # Get second_id's values
-            res = session.query(NickValues).filter(NickValues.nick_id == second_id).all()
+            results = session.execute(
+                select(NickValues).where(NickValues.nick_id == second_id)
+            ).scalars()
+
             # Update first_id with second_id values if first_id doesn't have that key
-            for row in res:
-                first_res = session.query(NickValues) \
-                    .filter(NickValues.nick_id == first_id) \
-                    .filter(NickValues.key == row.key) \
-                    .one_or_none()
+            for row in results:
+                first_res = session.execute(
+                    select(NickValues)
+                    .where(NickValues.nick_id == first_id)
+                    .where(NickValues.key == row.key)
+                ).scalar_one_or_none()
+
                 if not first_res:
-                    self.set_nick_value(first_nick, row.key, _deserialize(row.value))
-            session.query(NickValues).filter(NickValues.nick_id == second_id).delete()
-            session.query(Nicknames) \
-                .filter(Nicknames.nick_id == second_id) \
-                .update({'nick_id': first_id})
+                    self.set_nick_value(
+                        first_nick, row.key, _deserialize(row.value))
+
+            session.execute(
+                delete(NickValues)
+                .where(NickValues.nick_id == second_id)
+                .execution_options(synchronize_session="fetch")
+            )
+            session.execute(
+                update(Nicknames)
+                .where(Nicknames.nick_id == second_id)
+                .values(nick_id=first_id)
+                .execution_options(synchronize_session="fetch")
+            )
             session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
     # CHANNEL FUNCTIONS
 
-    def get_channel_slug(self, chan):
+    def get_channel_slug(self, chan: str) -> str:
         """Return the case-normalized representation of ``channel``.
 
-        :param str channel: the channel name to normalize, with prefix
-                            (required)
-        :return str: the case-normalized channel name (or "slug"
-                     representation)
+        :param channel: the channel name to normalize, with prefix (required)
+        :return: the case-normalized channel name (or "slug" representation)
 
         This is useful to make sure that a channel name is stored consistently
         in both the bot's own database and third-party plugins'
         databases/files, without regard for variation in case between
         different clients and/or servers on the network.
         """
-        chan = Identifier(chan)
-        slug = chan.lower()
-        session = self.ssession()
-        try:
-            count = session.query(ChannelValues) \
-                .filter(ChannelValues.channel == slug) \
-                .count()
+        slug = self.make_identifier(chan).lower()
 
-            if count == 0:
-                # see if it needs case-mapping migration
-                old_rows = session.query(ChannelValues) \
-                    .filter(ChannelValues.channel == Identifier._lower_swapped(chan))
-                old_count = old_rows.count()
-                if old_count > 0:
-                    # it does!
-                    old_rows.update({ChannelValues.channel: slug})
-                    session.commit()
+        with self.session() as session:
+            # Always migrate from old casemapping
+            session.execute(
+                update(ChannelValues)
+                .where(ChannelValues.channel == Identifier._lower_swapped(chan))
+                .values(channel=slug)
+                .execution_options(synchronize_session="fetch")
+            )
+            session.commit()
 
-            return slug
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
+        return slug
 
-    def set_channel_value(self, channel, key, value):
+    def set_channel_value(
+        self,
+        channel: str,
+        key: str,
+        value: typing.Any,
+    ) -> None:
         """Set or update a value in the key-value store for ``channel``.
 
-        :param str channel: the channel with which to associate the ``value``
-        :param str key: the name by which this ``value`` may be accessed later
-        :param mixed value: the value to set for this ``key`` under ``channel``
+        :param channel: the channel with which to associate the ``value``
+        :param key: the name by which this ``value`` may be accessed later
+        :param value: the value to set for this ``key`` under ``channel``
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         The ``value`` can be any of a range of types; it need not be a string.
@@ -632,32 +736,32 @@ class SopelDB(object):
         """
         channel = self.get_channel_slug(channel)
         value = json.dumps(value, ensure_ascii=False)
-        session = self.ssession()
-        try:
-            result = session.query(ChannelValues) \
-                .filter(ChannelValues.channel == channel)\
-                .filter(ChannelValues.key == key) \
-                .one_or_none()
+        with self.session() as session:
+            result = session.execute(
+                select(ChannelValues)
+                .where(ChannelValues.channel == channel)
+                .where(ChannelValues.key == key)
+            ).scalar_one_or_none()
+
             # ChannelValue exists, update
             if result:
                 result.value = value
                 session.commit()
             # DNE - Insert
             else:
-                new_channelvalue = ChannelValues(channel=channel, key=key, value=value)
+                new_channelvalue = ChannelValues(
+                    channel=channel,
+                    key=key,
+                    value=value,
+                )
                 session.add(new_channelvalue)
                 session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def delete_channel_value(self, channel, key):
+    def delete_channel_value(self, channel: str, key: str) -> None:
         """Delete a value from the key-value store for ``channel``.
 
-        :param str channel: the channel whose values to modify
-        :param str key: the name of the value to delete
+        :param channel: the channel whose values to modify
+        :param key: the name of the value to delete
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. seealso::
@@ -669,29 +773,28 @@ class SopelDB(object):
 
         """
         channel = self.get_channel_slug(channel)
-        session = self.ssession()
-        try:
-            result = session.query(ChannelValues) \
-                .filter(ChannelValues.channel == channel)\
-                .filter(ChannelValues.key == key) \
-                .one_or_none()
-            # ChannelValue exists, delete
-            if result:
-                session.delete(result)
-                session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
+        with self.session() as session:
+            session.execute(
+                delete(ChannelValues)
+                .where(
+                    ChannelValues.channel == channel,
+                    ChannelValues.key == key
+                ).execution_options(synchronize_session="fetch")
+            )
+            session.commit()
 
-    def get_channel_value(self, channel, key, default=None):
+    def get_channel_value(
+        self,
+        channel: str,
+        key: str,
+        default: typing.Optional[typing.Any] = None,
+    ):
         """Get a value from the key-value store for ``channel``.
 
-        :param str channel: the channel whose values to access
-        :param str key: the name by which the desired value was saved
-        :param mixed default: value to return if ``key`` does not have a value
-                              set (optional)
+        :param channel: the channel whose values to access
+        :param key: the name by which the desired value was saved
+        :param default: value to return if ``key`` does not have a value set
+                        (optional)
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. versionadded:: 7.0
@@ -708,31 +811,50 @@ class SopelDB(object):
 
         """
         channel = self.get_channel_slug(channel)
-        session = self.ssession()
-        try:
-            result = session.query(ChannelValues) \
-                .filter(ChannelValues.channel == channel)\
-                .filter(ChannelValues.key == key) \
-                .one_or_none()
+        with self.session() as session:
+            result = session.execute(
+                select(ChannelValues)
+                .where(ChannelValues.channel == channel)
+                .where(ChannelValues.key == key)
+            ).scalar_one_or_none()
             if result is not None:
                 result = result.value
             elif default is not None:
                 result = default
             return _deserialize(result)
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
+
+    def forget_channel(self, channel: str) -> None:
+        """Remove all of a channel's stored values.
+
+        :param channel: the name of the channel for which to delete values
+        :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
+
+        .. important::
+
+            This is a Nuclear Option. Be *very* sure that you want to do it.
+
+        """
+        channel = self.get_channel_slug(channel)
+        with self.session() as session:
+            session.execute(
+                delete(ChannelValues)
+                .where(ChannelValues.channel == channel)
+            )
+            session.commit()
 
     # PLUGIN FUNCTIONS
 
-    def set_plugin_value(self, plugin, key, value):
+    def set_plugin_value(
+        self,
+        plugin: str,
+        key: str,
+        value: typing.Any,
+    ) -> None:
         """Set or update a value in the key-value store for ``plugin``.
 
-        :param str plugin: the plugin name with which to associate the ``value``
-        :param str key: the name by which this ``value`` may be accessed later
-        :param mixed value: the value to set for this ``key`` under ``plugin``
+        :param plugin: the plugin name with which to associate the ``value``
+        :param key: the name by which this ``value`` may be accessed later
+        :param value: the value to set for this ``key`` under ``plugin``
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         The ``value`` can be any of a range of types; it need not be a string.
@@ -750,12 +872,12 @@ class SopelDB(object):
         """
         plugin = plugin.lower()
         value = json.dumps(value, ensure_ascii=False)
-        session = self.ssession()
-        try:
-            result = session.query(PluginValues) \
-                .filter(PluginValues.plugin == plugin)\
-                .filter(PluginValues.key == key) \
-                .one_or_none()
+        with self.session() as session:
+            result = session.execute(
+                select(PluginValues)
+                .where(PluginValues.plugin == plugin)
+                .where(PluginValues.key == key)
+            ).scalar_one_or_none()
             # PluginValue exists, update
             if result:
                 result.value = value
@@ -765,17 +887,12 @@ class SopelDB(object):
                 new_pluginvalue = PluginValues(plugin=plugin, key=key, value=value)
                 session.add(new_pluginvalue)
                 session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def delete_plugin_value(self, plugin, key):
+    def delete_plugin_value(self, plugin: str, key: str) -> None:
         """Delete a value from the key-value store for ``plugin``.
 
-        :param str plugin: the plugin name whose values to modify
-        :param str key: the name of the value to delete
+        :param plugin: the plugin name whose values to modify
+        :param key: the name of the value to delete
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. seealso::
@@ -787,29 +904,29 @@ class SopelDB(object):
 
         """
         plugin = plugin.lower()
-        session = self.ssession()
-        try:
-            result = session.query(PluginValues) \
-                .filter(PluginValues.plugin == plugin)\
-                .filter(PluginValues.key == key) \
-                .one_or_none()
+        with self.session() as session:
+            result = session.execute(
+                select(PluginValues)
+                .where(PluginValues.plugin == plugin)
+                .where(PluginValues.key == key)
+            ).scalar_one_or_none()
             # PluginValue exists, update
             if result:
                 session.delete(result)
                 session.commit()
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
 
-    def get_plugin_value(self, plugin, key, default=None):
+    def get_plugin_value(
+        self,
+        plugin: str,
+        key: str,
+        default: typing.Optional[typing.Any] = None,
+    ) -> typing.Optional[typing.Any]:
         """Get a value from the key-value store for ``plugin``.
 
-        :param str plugin: the plugin name whose values to access
-        :param str key: the name by which the desired value was saved
-        :param mixed default: value to return if ``key`` does not have a value
-                              set (optional)
+        :param plugin: the plugin name whose values to access
+        :param key: the name by which the desired value was saved
+        :param default: value to return if ``key`` does not have a value set
+                        (optional)
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. versionadded:: 7.0
@@ -826,32 +943,51 @@ class SopelDB(object):
 
         """
         plugin = plugin.lower()
-        session = self.ssession()
-        try:
-            result = session.query(PluginValues) \
-                .filter(PluginValues.plugin == plugin)\
-                .filter(PluginValues.key == key) \
-                .one_or_none()
+        with self.session() as session:
+            result = session.execute(
+                select(PluginValues)
+                .where(PluginValues.plugin == plugin)
+                .where(PluginValues.key == key)
+            ).scalar_one_or_none()
+
             if result is not None:
                 result = result.value
             elif default is not None:
                 result = default
             return _deserialize(result)
-        except SQLAlchemyError:
-            session.rollback()
-            raise
-        finally:
-            self.ssession.remove()
+
+    def forget_plugin(self, plugin: str) -> None:
+        """Remove all of a plugin's stored values.
+
+        :param plugin: the name of the plugin for which to delete values
+        :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
+
+        .. important::
+
+            This is a Nuclear Option. Be *very* sure that you want to do it.
+
+        """
+        plugin = plugin.lower()
+        with self.session() as session:
+            session.execute(
+                delete(PluginValues).where(PluginValues.plugin == plugin)
+            )
+            session.commit()
 
     # NICK AND CHANNEL FUNCTIONS
 
-    def get_nick_or_channel_value(self, name, key, default=None):
+    def get_nick_or_channel_value(
+        self,
+        name: str,
+        key: str,
+        default=None
+    ) -> typing.Optional[typing.Any]:
         """Get a value from the key-value store for ``name``.
 
-        :param str name: nick or channel whose values to access
-        :param str key: the name by which the desired value was saved
-        :param mixed default: value to return if ``key`` does not have a value
-                              set (optional)
+        :param name: nick or channel whose values to access
+        :param key: the name by which the desired value was saved
+        :param default: value to return if ``key`` does not have a value set
+                        (optional)
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
 
         .. versionadded:: 7.0
@@ -870,17 +1006,25 @@ class SopelDB(object):
             :meth:`get_channel_value`.
 
         """
-        name = Identifier(name)
-        if name.is_nick():
-            return self.get_nick_value(name, key, default)
+        if not isinstance(name, Identifier):
+            identifier = self.make_identifier(name)
         else:
-            return self.get_channel_value(name, key, default)
+            identifier = typing.cast('Identifier', name)
 
-    def get_preferred_value(self, names, key):
+        if identifier.is_nick():
+            return self.get_nick_value(identifier, key, default)
+        else:
+            return self.get_channel_value(identifier, key, default)
+
+    def get_preferred_value(
+        self,
+        names: Iterable[str],
+        key: str,
+    ) -> typing.Optional[typing.Any]:
         """Get a value for the first name which has it set.
 
-        :param list names: a list of channel names and/or nicknames
-        :param str key: the name by which the desired value was saved
+        :param names: a list of channel names and/or nicknames
+        :param key: the name by which the desired value was saved
         :return: the value for ``key`` from the first ``name`` which has it set,
                  or ``None`` if none of the ``names`` has it set
         :raise ~sqlalchemy.exc.SQLAlchemyError: if there is a database error
@@ -901,3 +1045,6 @@ class SopelDB(object):
             value = self.get_nick_or_channel_value(name, key)
             if value is not None:
                 return value
+
+        # Explicit return for type check
+        return None

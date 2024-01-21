@@ -1,0 +1,378 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.31.0
+    method: GET
+    uri: https://api.coingecko.com/api/v3/exchange_rates
+  response:
+    body:
+      string: "{\"rates\":{\"btc\":{\"name\":\"Bitcoin\",\"unit\":\"BTC\",\"value\":1.0,\"type\":\"crypto\"},\"eth\":{\"name\":\"Ether\",\"unit\":\"ETH\",\"value\":16.192,\"type\":\"crypto\"},\"ltc\":{\"name\":\"Litecoin\",\"unit\":\"LTC\",\"value\":408.142,\"type\":\"crypto\"},\"bch\":{\"name\":\"Bitcoin
+        Cash\",\"unit\":\"BCH\",\"value\":115.368,\"type\":\"crypto\"},\"bnb\":{\"name\":\"Binance
+        Coin\",\"unit\":\"BNB\",\"value\":126.626,\"type\":\"crypto\"},\"eos\":{\"name\":\"EOS\",\"unit\":\"EOS\",\"value\":45745.839,\"type\":\"crypto\"},\"xrp\":{\"name\":\"XRP\",\"unit\":\"XRP\",\"value\":52367.203,\"type\":\"crypto\"},\"xlm\":{\"name\":\"Lumens\",\"unit\":\"XLM\",\"value\":241520.224,\"type\":\"crypto\"},\"link\":{\"name\":\"Chainlink\",\"unit\":\"LINK\",\"value\":3476.143,\"type\":\"crypto\"},\"dot\":{\"name\":\"Polkadot\",\"unit\":\"DOT\",\"value\":6445.577,\"type\":\"crypto\"},\"yfi\":{\"name\":\"Yearn.finance\",\"unit\":\"YFI\",\"value\":5.003,\"type\":\"crypto\"},\"usd\":{\"name\":\"US
+        Dollar\",\"unit\":\"$\",\"value\":27116.789,\"type\":\"fiat\"},\"aed\":{\"name\":\"United
+        Arab Emirates Dirham\",\"unit\":\"DH\",\"value\":99601.052,\"type\":\"fiat\"},\"ars\":{\"name\":\"Argentine
+        Peso\",\"unit\":\"$\",\"value\":9526798.84,\"type\":\"fiat\"},\"aud\":{\"name\":\"Australian
+        Dollar\",\"unit\":\"A$\",\"value\":42213.058,\"type\":\"fiat\"},\"bdt\":{\"name\":\"Bangladeshi
+        Taka\",\"unit\":\"\u09F3\",\"value\":2996127.929,\"type\":\"fiat\"},\"bhd\":{\"name\":\"Bahraini
+        Dinar\",\"unit\":\"BD\",\"value\":10245.807,\"type\":\"fiat\"},\"bmd\":{\"name\":\"Bermudian
+        Dollar\",\"unit\":\"$\",\"value\":27116.789,\"type\":\"fiat\"},\"brl\":{\"name\":\"Brazil
+        Real\",\"unit\":\"R$\",\"value\":136783.973,\"type\":\"fiat\"},\"cad\":{\"name\":\"Canadian
+        Dollar\",\"unit\":\"CA$\",\"value\":36785.145,\"type\":\"fiat\"},\"chf\":{\"name\":\"Swiss
+        Franc\",\"unit\":\"Fr.\",\"value\":24789.68,\"type\":\"fiat\"},\"clp\":{\"name\":\"Chilean
+        Peso\",\"unit\":\"CLP$\",\"value\":24445453.168,\"type\":\"fiat\"},\"cny\":{\"name\":\"Chinese
+        Yuan\",\"unit\":\"\xA5\",\"value\":194522.288,\"type\":\"fiat\"},\"czk\":{\"name\":\"Czech
+        Koruna\",\"unit\":\"K\u010D\",\"value\":625648.055,\"type\":\"fiat\"},\"dkk\":{\"name\":\"Danish
+        Krone\",\"unit\":\"kr.\",\"value\":191315.023,\"type\":\"fiat\"},\"eur\":{\"name\":\"Euro\",\"unit\":\"\u20AC\",\"value\":25652.184,\"type\":\"fiat\"},\"gbp\":{\"name\":\"British
+        Pound Sterling\",\"unit\":\"\xA3\",\"value\":22217.761,\"type\":\"fiat\"},\"hkd\":{\"name\":\"Hong
+        Kong Dollar\",\"unit\":\"HK$\",\"value\":212349.543,\"type\":\"fiat\"},\"huf\":{\"name\":\"Hungarian
+        Forint\",\"unit\":\"Ft\",\"value\":9997133.179,\"type\":\"fiat\"},\"idr\":{\"name\":\"Indonesian
+        Rupiah\",\"unit\":\"Rp\",\"value\":420129908.636,\"type\":\"fiat\"},\"ils\":{\"name\":\"Israeli
+        New Shekel\",\"unit\":\"\u20AA\",\"value\":103334.871,\"type\":\"fiat\"},\"inr\":{\"name\":\"Indian
+        Rupee\",\"unit\":\"\u20B9\",\"value\":2255399.636,\"type\":\"fiat\"},\"jpy\":{\"name\":\"Japanese
+        Yen\",\"unit\":\"\xA5\",\"value\":4057214.026,\"type\":\"fiat\"},\"krw\":{\"name\":\"South
+        Korean Won\",\"unit\":\"\u20A9\",\"value\":36687117.846,\"type\":\"fiat\"},\"kwd\":{\"name\":\"Kuwaiti
+        Dinar\",\"unit\":\"KD\",\"value\":8393.866,\"type\":\"fiat\"},\"lkr\":{\"name\":\"Sri
+        Lankan Rupee\",\"unit\":\"Rs\",\"value\":8811643.795,\"type\":\"fiat\"},\"mmk\":{\"name\":\"Burmese
+        Kyat\",\"unit\":\"K\",\"value\":57066530.853,\"type\":\"fiat\"},\"mxn\":{\"name\":\"Mexican
+        Peso\",\"unit\":\"MX$\",\"value\":472305.106,\"type\":\"fiat\"},\"myr\":{\"name\":\"Malaysian
+        Ringgit\",\"unit\":\"RM\",\"value\":127320.105,\"type\":\"fiat\"},\"ngn\":{\"name\":\"Nigerian
+        Naira\",\"unit\":\"\u20A6\",\"value\":21144788.942,\"type\":\"fiat\"},\"nok\":{\"name\":\"Norwegian
+        Krone\",\"unit\":\"kr\",\"value\":290437.084,\"type\":\"fiat\"},\"nzd\":{\"name\":\"New
+        Zealand Dollar\",\"unit\":\"NZ$\",\"value\":45132.696,\"type\":\"fiat\"},\"php\":{\"name\":\"Philippine
+        Peso\",\"unit\":\"\u20B1\",\"value\":1536179.676,\"type\":\"fiat\"},\"pkr\":{\"name\":\"Pakistani
+        Rupee\",\"unit\":\"\u20A8\",\"value\":7846800.933,\"type\":\"fiat\"},\"pln\":{\"name\":\"Polish
+        Zloty\",\"unit\":\"z\u0142\",\"value\":118499.556,\"type\":\"fiat\"},\"rub\":{\"name\":\"Russian
+        Ruble\",\"unit\":\"\u20BD\",\"value\":2657445.358,\"type\":\"fiat\"},\"sar\":{\"name\":\"Saudi
+        Riyal\",\"unit\":\"SR\",\"value\":101701.518,\"type\":\"fiat\"},\"sek\":{\"name\":\"Swedish
+        Krona\",\"unit\":\"kr\",\"value\":296334.036,\"type\":\"fiat\"},\"sgd\":{\"name\":\"Singapore
+        Dollar\",\"unit\":\"S$\",\"value\":37001.401,\"type\":\"fiat\"},\"thb\":{\"name\":\"Thai
+        Baht\",\"unit\":\"\u0E3F\",\"value\":991135.328,\"type\":\"fiat\"},\"try\":{\"name\":\"Turkish
+        Lira\",\"unit\":\"\u20BA\",\"value\":743047.456,\"type\":\"fiat\"},\"twd\":{\"name\":\"New
+        Taiwan Dollar\",\"unit\":\"NT$\",\"value\":874413.413,\"type\":\"fiat\"},\"uah\":{\"name\":\"Ukrainian
+        hryvnia\",\"unit\":\"\u20B4\",\"value\":1003617.023,\"type\":\"fiat\"},\"vef\":{\"name\":\"Venezuelan
+        bol\xEDvar fuerte\",\"unit\":\"Bs.F\",\"value\":2715.204,\"type\":\"fiat\"},\"vnd\":{\"name\":\"Vietnamese
+        \u0111\u1ED3ng\",\"unit\":\"\u20AB\",\"value\":659055093.19,\"type\":\"fiat\"},\"zar\":{\"name\":\"South
+        African Rand\",\"unit\":\"R\",\"value\":512101.489,\"type\":\"fiat\"},\"xdr\":{\"name\":\"IMF
+        Special Drawing Rights\",\"unit\":\"XDR\",\"value\":20724.684,\"type\":\"fiat\"},\"xag\":{\"name\":\"Silver
+        - Troy Ounce\",\"unit\":\"XAG\",\"value\":1222.524,\"type\":\"commodity\"},\"xau\":{\"name\":\"Gold
+        - Troy Ounce\",\"unit\":\"XAU\",\"value\":14.673,\"type\":\"commodity\"},\"bits\":{\"name\":\"Bits\",\"unit\":\"\u03BCBTC\",\"value\":1000000.0,\"type\":\"crypto\"},\"sats\":{\"name\":\"Satoshi\",\"unit\":\"sats\",\"value\":100000000.0,\"type\":\"crypto\"}}}"
+    headers:
+      Access-Control-Allow-Headers:
+      - Origin, X-Requested-With, Content-Type, Accept, Authorization
+      Access-Control-Allow-Methods:
+      - POST, PUT, DELETE, GET, OPTIONS
+      Access-Control-Allow-Origin:
+      - '*'
+      Access-Control-Expose-Headers:
+      - link, per-page, total
+      Access-Control-Request-Method:
+      - '*'
+      Alternate-Protocol:
+      - 443:npn-spdy/2
+      CF-Cache-Status:
+      - HIT
+      CF-RAY:
+      - 80f7953daa694c94-MSP
+      Cache-Control:
+      - public, max-age=120
+      Connection:
+      - keep-alive
+      Content-Encoding:
+      - br
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Sun, 01 Oct 2023 20:51:19 GMT
+      ETag:
+      - W/"730c99d03289ea4b2a5aa0bfebcdb8cb"
+      Expires:
+      - Sun, 01 Oct 2023 20:53:19 GMT
+      Referrer-Policy:
+      - strict-origin-when-cross-origin
+      Server:
+      - cloudflare
+      Set-Cookie:
+      - __cf_bm=hjvLAJlfDxTF66qjE81JNmCAeEFTg7kP8RhJVWzhhSY-1696193479-0-AXcmiCQ/V6/Hrb6y5qcs0Tq6pqaTXKvsxKE7XjtG88pMm/g3KAZWbKd+wUFpt+wKM89ewdWaWw69JiLHo77D9XY=;
+        path=/; expires=Sun, 01-Oct-23 21:21:19 GMT; domain=.api.coingecko.com; HttpOnly;
+        Secure; SameSite=None
+      Strict-Transport-Security:
+      - max-age=15724800; includeSubdomains
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Accept-Encoding, Origin
+      X-Content-Type-Options:
+      - nosniff
+      X-Download-Options:
+      - noopen
+      X-Frame-Options:
+      - SAMEORIGIN
+      X-Permitted-Cross-Domain-Policies:
+      - none
+      X-Request-Id:
+      - 868bf71e-512c-49d8-9985-261b15289653
+      X-Runtime:
+      - '0.084620'
+      X-XSS-Protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.31.0
+    method: GET
+    uri: https://open.er-api.com/v6/latest/EUR
+  response:
+    body:
+      string: '{"result":"success","provider":"https://www.exchangerate-api.com","documentation":"https://www.exchangerate-api.com/docs/free","terms_of_use":"https://www.exchangerate-api.com/terms","time_last_update_unix":1696118552,"time_last_update_utc":"Sun,
+        01 Oct 2023 00:02:32 +0000","time_next_update_unix":1696206702,"time_next_update_utc":"Mon,
+        02 Oct 2023 00:31:42 +0000","time_eol_unix":0,"base_code":"EUR","rates":{"EUR":1,"AED":3.884474,"AFN":82.54531,"ALL":106.503046,"AMD":418.721148,"ANG":1.893317,"AOA":883.989055,"ARS":370.212307,"AUD":1.640007,"AWG":1.893317,"AZN":1.802558,"BAM":1.95583,"BBD":2.115438,"BDT":116.561496,"BGN":1.95583,"BHD":0.397702,"BIF":2985.034948,"BMD":1.057719,"BND":1.444977,"BOB":7.307976,"BRL":5.308575,"BSD":1.057719,"BTN":87.983906,"BWP":14.494392,"BYN":3.047928,"BZD":2.115438,"CAD":1.430381,"CDF":2631.233871,"CHF":0.966998,"CLP":959.961674,"CNY":7.718692,"COP":4313.318245,"CRC":565.3924,"CUP":25.385261,"CVE":110.265,"CZK":24.386644,"DJF":187.978919,"DKK":7.460234,"DOP":59.93039,"DZD":145.150187,"EGP":32.700872,"ERN":15.865788,"ETB":58.978847,"FJD":2.426578,"FKP":0.866315,"FOK":7.46038,"GBP":0.866317,"GEL":2.838726,"GGP":0.866315,"GHS":12.44916,"GIP":0.866315,"GMD":69.052487,"GNF":9063.138889,"GTQ":8.298895,"GYD":220.902505,"HKD":8.280852,"HNL":26.054506,"HRK":7.5345,"HTG":143.102193,"HUF":389.735142,"IDR":16412.454774,"ILS":4.044046,"IMP":0.866315,"INR":87.984057,"IQD":1382.512712,"IRR":44632.813246,"ISK":144.900843,"JEP":0.866315,"JMD":164.858458,"JOD":0.749923,"JPY":157.965623,"KES":156.021652,"KGS":93.614746,"KHR":4350.306667,"KID":1.639995,"KMF":491.96775,"KRW":1426.682028,"KWD":0.326957,"KYD":0.881432,"KZT":506.925969,"LAK":21516.339237,"LBP":15865.78842,"LKR":342.37238,"LRD":199.407927,"LSL":19.98806,"LYD":5.161322,"MAD":10.877776,"MDL":19.301859,"MGA":4798.132353,"MKD":61.5016,"MMK":2661.95976,"MNT":3665.016674,"MOP":8.529255,"MRU":40.410329,"MUR":46.821469,"MVR":16.290227,"MWK":1186.843188,"MXN":18.452127,"MYR":4.974924,"MZN":67.580168,"NAD":19.98806,"NGN":907.79099,"NIO":38.662306,"NOK":11.293032,"NPR":140.77425,"NZD":1.761544,"OMR":0.40669,"PAB":1.057719,"PEN":4.007614,"PGK":3.843705,"PHP":59.996589,"PKR":302.72906,"PLN":4.626396,"PYG":7727.646261,"QAR":3.850098,"RON":4.973917,"RSD":117.203457,"RUB":103.138172,"RWF":1335.603898,"SAR":3.966447,"SBD":8.951671,"SCR":14.294945,"SDG":472.175109,"SEK":11.534893,"SGD":1.444979,"SHP":0.866315,"SLE":21.775238,"SLL":21782.609565,"SOS":603.092421,"SRD":40.692567,"SSP":1073.96241,"STN":24.5,"SYP":13649.896587,"SZL":19.98806,"THB":38.710832,"TJS":11.592476,"TMT":3.705225,"TND":3.349414,"TOP":2.49893,"TRY":29.021196,"TTD":7.491725,"TVD":1.639995,"TWD":34.045153,"TZS":2657.375386,"UAH":39.181942,"UGX":3975.922323,"USD":1.057361,"UYU":40.469499,"UZS":12985.975003,"VES":36.407959,"VND":25710.272165,"VUV":127.746609,"WST":2.927129,"XAF":655.957,"XCD":2.855842,"XDR":0.805514,"XOF":655.957,"XPF":119.332,"YER":264.02934,"ZAR":19.98818,"ZMW":22.203222,"ZWL":5782.7245}}'
+    headers:
+      Age:
+      - '61'
+      CF-Cache-Status:
+      - HIT
+      CF-RAY:
+      - 80f7953e7889e1db-ORD
+      Cache-Control:
+      - public, max-age=3600
+      Connection:
+      - keep-alive
+      Content-Encoding:
+      - br
+      Content-Type:
+      - application/json
+      Date:
+      - Sun, 01 Oct 2023 20:51:19 GMT
+      Last-Modified:
+      - Sun, 01 Oct 2023 20:26:45 GMT
+      NEL:
+      - '{"success_fraction":0,"report_to":"cf-nel","max_age":604800}'
+      Report-To:
+      - '{"endpoints":[{"url":"https:\/\/a.nel.cloudflare.com\/report\/v3?s=VaR0%2FFYZ8I4iCQD0Q8lLiVvgLTsdcJa6Tg7RX%2B8kp5zUKytrAqiRjKUNvUI%2B4WFGjRDYWIx7nPKCSNLVMycaX%2Fwr9%2FzaTEtGlnnDfMfTShS9Fev%2FVfjcqc5BxUUEXwzEWg%3D%3D"}],"group":"cf-nel","max_age":604800}'
+      Server:
+      - cloudflare
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Accept-Encoding
+      access-control-allow-origin:
+      - '*'
+      x-content-type-options:
+      - NOSNIFF
+      x-frame-options:
+      - SAMEORIGIN
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.31.0
+    method: GET
+    uri: https://api.coingecko.com/api/v3/exchange_rates
+  response:
+    body:
+      string: !!binary |
+        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
+        nR5ykP55HawB66YlNFWde04tt0mJln7e+/zz
+    headers:
+      Access-Control-Allow-Headers:
+      - Origin, X-Requested-With, Content-Type, Accept, Authorization
+      Access-Control-Allow-Methods:
+      - POST, PUT, DELETE, GET, OPTIONS
+      Access-Control-Allow-Origin:
+      - '*'
+      Access-Control-Expose-Headers:
+      - link, per-page, total
+      Access-Control-Request-Method:
+      - '*'
+      Age:
+      - '37'
+      Alternate-Protocol:
+      - 443:npn-spdy/2
+      CF-Cache-Status:
+      - HIT
+      CF-RAY:
+      - 80f7a377ee244c94-MSP
+      Cache-Control:
+      - public, max-age=120
+      Connection:
+      - keep-alive
+      Content-Encoding:
+      - br
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Sun, 01 Oct 2023 21:01:02 GMT
+      ETag:
+      - W/"4cf0fd708b1693db791a0b37d93997ee"
+      Expires:
+      - Sun, 01 Oct 2023 21:03:02 GMT
+      Referrer-Policy:
+      - strict-origin-when-cross-origin
+      Server:
+      - cloudflare
+      Set-Cookie:
+      - __cf_bm=5UxxXqU.f3qSFhDvN3DCv3aLFd4UDhDW7gmM6ksvY2A-1696194062-0-AQ9tlsT69DycH8roZ+KZQt3jORqH5nUflkJkiZWZR4KkdFarvOKVS87bG3WewA2/IqbaET5fwj9cShbzBPWSW28=;
+        path=/; expires=Sun, 01-Oct-23 21:31:02 GMT; domain=.api.coingecko.com; HttpOnly;
+        Secure; SameSite=None
+      Strict-Transport-Security:
+      - max-age=15724800; includeSubdomains
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Accept-Encoding, Origin
+      X-Content-Type-Options:
+      - nosniff
+      X-Download-Options:
+      - noopen
+      X-Frame-Options:
+      - SAMEORIGIN
+      X-Permitted-Cross-Domain-Policies:
+      - none
+      X-Request-Id:
+      - 88109ab3-e11d-4952-87bf-94309a30c25e
+      X-Runtime:
+      - '0.126824'
+      X-XSS-Protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.31.0
+    method: GET
+    uri: https://open.er-api.com/v6/latest/EUR
+  response:
+    body:
+      string: !!binary |
+        E6QLAMS3L9U6XV3vulj4I/wA3Ei1RMmM003Fi9NoQtLUSN7Nf38r8NQCziINw5/9CSiO3gRegtkN
+        cmK3de8FcnK6Fu5xA+Eu39rW1E+E0Cvc5aHbepbsv/hM1mAkXr99/fr8+grCAoQh8dPb25+v+f79
+        P//5T0Yf1b8+vz3//fOfP/PXl99B+P7l67ffn/94+/z288sfsH7vv3/5+vr+h7+en0H4HwW7P778
+        8PHb6zOeue4iCG8///788bfPr28fv/35/ee354/f/vj5X0hp0URGrTpsJm9fkVi+/UHvirw7fn17
+        p0XtXSlZNE3f/a2UUuJT/fH8L5NaWlOtTCX2L2Sls5LKP7/8FrdYIXz5/Pr88evL989IXN7OIPz1
+        +e35FfnfWw8qhbC6nJDGY7h3J6yuDsihXL2aEFa7HVJK41qseCOs9hPSZXBXER+E1WGDFB5hJp2w
+        Oq6QYxjHiFIrYTUvSOuFVdRKJ6xuJ6Rw81JKJ6zuN0jhEWbSCaunQ3EoWusgrFf7ckVR6zDCej0h
+        lUWq2yCspzNSpHFt4tEI680BMYbrCVnYoveihPXNFVJjVC7m4YOw3s/GpdTeJQjrQ7sZ7h69E9bH
+        NbKzlR69EdbzDlnZyqi9EtYL/urPB+ToHMOiNML6/oQUZw+3UML68YA0Lt5DB2H9lAx3sXr6q2zF
+        hhAupiukNhNWs9GFcHF9hSwcrUUMwsXuhIwaHE1ad8LF4RHZuctooYSL4wnpJsYmQ70SLuYLZG2V
+        LdQJF7cnpFa2UbUJ4eLuEilSWFslXDxtkepsozV3wvThCimjc/QREoRpu0V29lbUnDAdT8gaHFYs
+        CNPThBSvLLXI6ITLzQlpyr2U0ZVwOR+QUnm02scgXJ7XyDo4+hjeCVcfJqSya6t9EK62J2Th0ZpJ
+        JVwdTw0bhM16wKCdsLncIZWHja6NsNnAN7O5XpCi7B7SCJubPhf7CdmCS1UfnbA5XCGjNGOxMUYQ
+        NufvkIM1xohK2DxOSNXCUbSWSrjeTkf2UUZVwvVhh9TGpXotjXA9z34+qnklXJ83SHFjKSphhOvb
+        K6SN4G5VXAk304yU5qLs1Xt3ws1uQToXd0Iqb/ZJ8DeHeSOOy0vthJvvJqTYUK6iXZRwM89I92bK
+        Q0zjDLhskeLOUcpwI3y4DMx+IIp7cx51eB2ED0dqzVn3CDXCh9MjUmrnaLWpEbaXC1Jq46LSqhK2
+        mwUZxk28eyNsr2ekWy1spbXWCdsbMk60WURUwnZ/hfQQjtZ7JWzne6S4Nm5Diw7C9p7eUFvUTtg+
+        sv3vNoa4KWH7dEbW0ji0RgvCbrVFqlRpbBZqnbBbn5BSR6vcx3Al7LYz0lzZutog7OYJKRHspYd2
+        wm7ZISU4xiiNsHuckJWliakS9qsJKYVH7703wn7aISXYiowahP1mhfQeg8XUqhH22wnZhGuRRtjv
+        t0htTThq9EbYH85Ia61ykda6E/bHE3Jw1dBaCfv5FumFXYppEPa3M9IbDxVvQdjfzUhprFFUO2F/
+        v0WKjMbDTcYg7B8OSBnsVUU7Yf84I52je6gT9k8HZOtcR5E2CIfVhJTgGKM0wmFzQEbp3KNEEA43
+        R6QNbk2tNMLhuEWKsIYVU8LhNCPFC/fuWgkHrdgC9ybVnXDcz8jCXloLwmm11md8ujxsfpfSmzjh
+        tNkal9Stl0o4XYsQiFZHEE7LKRTlroqMTrsI2Zo2i0Y4PW6QvWvn5k0D8Xer2QhhLSUGYT5iYHQL
+        6YRZ7zNIZy3mtRPm2zVSijjklq6E+f4KKWaVW7ERg7BEdYnW3DthWXe3qNK6EJaL2SIuScPDK2GZ
+        NkjvytKrlCAsl1ukCFfzEUZYNv6kDsJyTf7ntOwukSrce1UbhGW3Q6r0odxK1FYJy3FBtmJcQl2F
+        sMwT0gu30No6YVlOSCndOJq6EJbzAanOlbA8npBizYNHtDo6YXnaISU4xiiNcL5eI21wlzJMCecP
+        Sw6ZQ703wnl/Rhr3UlUr4Xx48XAzDxcnnI8n0Wcj3yzn+RGpwUVFohHO56nikI5X3E2CsR7n+wlp
+        zsWrVCOcnxakttrZerXRCLera6QFy5BwJdxuHpAWvXKomhrh1tDF1oRw+0gu2MIjCLdP1jH3MSpH
+        r6UY4e5yQVpjLz1qEO4OE1Jrl8LaVVol3N3eIUU7d2+tBOF+OSOVQ7toEB5WV8hWK0fthIeLybxQ
+        rYKEHiZC9BylVnHCw3F87dMVUiTYTAmPlzNSm3PRMCc8rebVGYkMwtP+HqnKWkxVCU/3O2TtQ7mr
+        1///Hw==
+    headers:
+      Age:
+      - '3241'
+      CF-Cache-Status:
+      - HIT
+      CF-RAY:
+      - 80f7a378cbc98117-ORD
+      Cache-Control:
+      - public, max-age=3600
+      Connection:
+      - keep-alive
+      Content-Encoding:
+      - br
+      Content-Type:
+      - application/json
+      Date:
+      - Sun, 01 Oct 2023 21:01:02 GMT
+      Last-Modified:
+      - Sun, 01 Oct 2023 19:26:09 GMT
+      NEL:
+      - '{"success_fraction":0,"report_to":"cf-nel","max_age":604800}'
+      Report-To:
+      - '{"endpoints":[{"url":"https:\/\/a.nel.cloudflare.com\/report\/v3?s=RXf8uRjL1%2FXEULJmIVRhNNDHJUPpkNRSO2KA1G3g9g71zizQLVFQTlKAMPqZnUEcvwmXnYn0r8RchUhnZ7E8l38WDBJcD%2Fykkkl3nBzdtJBxhdunZSUFvt%2FRtMCZzAC23g%3D%3D"}],"group":"cf-nel","max_age":604800}'
+      Server:
+      - cloudflare
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Accept-Encoding
+      access-control-allow-origin:
+      - '*'
+      x-content-type-options:
+      - NOSNIFF
+      x-frame-options:
+      - SAMEORIGIN
+    status:
+      code: 200
+      message: OK
+version: 1

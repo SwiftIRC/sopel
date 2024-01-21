@@ -12,9 +12,9 @@ and only one plugin per unique name, using a specific order:
 
 * extra directories defined in the settings
 * homedir's ``plugins`` directory
-* ``sopel.plugins`` setuptools entry points
+* ``sopel.plugins`` entry point group
 * ``sopel_modules``'s subpackages
-* ``sopel.modules``'s core plugins
+* ``sopel.builtins``'s core plugins
 
 (The ``coretasks`` plugin is *always* the one from ``sopel.coretasks`` and
 cannot be overridden.)
@@ -26,24 +26,39 @@ exist for each type of plugin.
 # Copyright 2019, Florian Strzelecki <florian.strzelecki@gmail.com>
 #
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
 import collections
-import imp
+import importlib
 import itertools
+import logging
 import os
+from typing import TYPE_CHECKING, Union
 
-import pkg_resources
+# TODO: use stdlib importlib.metadata when possible, after dropping py3.9.
+# Stdlib does not support `entry_points(group='filter')` until py3.10, but
+# fallback logic is more trouble than it's worth when e.g. clean Ubuntu
+# py3.10 envs include old versions of this backport.
+import importlib_metadata
 
 from . import exceptions, handlers, rules  # noqa
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
-def _list_plugin_filenames(directory):
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _list_plugin_filenames(directory: Union[str, os.PathLike]) -> Iterable[tuple[str, str]]:
     # list plugin filenames from a directory
     # yield 2-value tuples: (name, absolute path)
     base = os.path.abspath(directory)
     for filename in os.listdir(base):
-        abspath = os.path.join(base, filename)
+        abspath = os.path.realpath(os.path.join(base, filename))
+        if not os.path.exists(abspath):
+            LOGGER.warning("Plugin path does not exist, skipping: %r", abspath)
+            continue
 
         if os.path.isdir(abspath):
             if os.path.isfile(os.path.join(abspath, '__init__.py')):
@@ -58,18 +73,21 @@ def find_internal_plugins():
     """List internal plugins.
 
     :return: yield instances of :class:`~.handlers.PyModulePlugin`
-             configured for ``sopel.modules.*``
+             configured for ``sopel.builtins.*``
 
-    Internal plugins can be found under ``sopel.modules``. This list does not
+    Internal plugins can be found under ``sopel.builtins``. This list does not
     include the ``coretasks`` plugin.
     """
-    plugin_dir = imp.find_module(
-        'modules',
-        [imp.find_module('sopel')[1]]
-    )[1]
+    builtins = importlib.util.find_spec('sopel.builtins')
+    if builtins is None or builtins.submodule_search_locations is None:
+        raise RuntimeError('Cannot resolve internal plugins')
+    plugin_list = itertools.chain.from_iterable(
+        _list_plugin_filenames(path)
+        for path in builtins.submodule_search_locations
+    )
 
-    for name, _ in _list_plugin_filenames(plugin_dir):
-        yield handlers.PyModulePlugin(name, 'sopel.modules')
+    for name, _ in set(plugin_list):
+        yield handlers.PyModulePlugin(name, 'sopel.builtins')
 
 
 def find_sopel_modules_plugins():
@@ -83,7 +101,7 @@ def find_sopel_modules_plugins():
     responsible to load such plugins.
     """
     try:
-        import sopel_modules
+        import sopel_modules  # type: ignore[import]
     except ImportError:
         return
 
@@ -93,17 +111,17 @@ def find_sopel_modules_plugins():
 
 
 def find_entry_point_plugins(group='sopel.plugins'):
-    """List plugins from a setuptools entry point group.
+    """List plugins from an entry point group.
 
-    :param str group: setuptools entry point group to look for
-                      (defaults to ``sopel.plugins``)
+    :param str group: entry point group to search in (defaults to
+                      ``sopel.plugins``)
     :return: yield instances of :class:`~.handlers.EntryPointPlugin`
-             created from setuptools entry point given ``group``
+             created from each entry point in the ``group``
 
-    This function finds plugins declared under a setuptools entry point; by
-    default it uses the ``sopel.plugins`` entry point.
+    This function finds plugins declared under an entry point group; by
+    default it looks in the ``sopel.plugins`` group.
     """
-    for entry_point in pkg_resources.iter_entry_points(group):
+    for entry_point in importlib_metadata.entry_points(group=group):
         yield handlers.EntryPointPlugin(entry_point)
 
 
@@ -139,7 +157,7 @@ def enumerate_plugins(settings):
 
         * :func:`find_internal_plugins` for internal plugins
         * :func:`find_sopel_modules_plugins` for ``sopel_modules.*`` plugins
-        * :func:`find_entry_point_plugins` for plugins exposed by setuptools
+        * :func:`find_entry_point_plugins` for plugins exposed via packages'
           entry points
         * :func:`find_directory_plugins` for plugins in ``$homedir/plugins``,
           and in extra directories as defined by ``settings.core.extra``
@@ -201,9 +219,9 @@ def get_usable_plugins(settings):
 
     * extra directories defined in the settings
     * homedir's ``plugins`` directory
-    * ``sopel.plugins`` setuptools entry points
+    * ``sopel.plugins`` entry point group
     * ``sopel_modules``'s subpackages
-    * ``sopel.modules``'s core plugins
+    * ``sopel.builtins``'s core plugins
 
     (The ``coretasks`` plugin is *always* the one from ``sopel.coretasks`` and
     cannot be overridden.)
@@ -222,9 +240,6 @@ def get_usable_plugins(settings):
         (plugin.name, (plugin, is_enabled))
         for plugin, is_enabled in enumerate_plugins(settings))
     # reset coretasks's position at the end of the loading queue
-    # Python 2's OrderedDict does not have a `move_to_end` method
-    # TODO: replace by plugins_info.move_to_end('coretasks') for Python 3
-    core_info = plugins_info.pop('coretasks')
-    plugins_info['coretasks'] = core_info
+    plugins_info.move_to_end('coretasks')
 
     return plugins_info

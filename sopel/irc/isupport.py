@@ -11,7 +11,7 @@ When a server wants to advertise its features and settings, it can use the
 # Copyright 2019, Florian Strzelecki <florian.strzelecki@gmail.com>
 #
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
 import functools
 import itertools
@@ -97,7 +97,7 @@ def _parse_prefix(value):
     if len(modes) != len(prefixes):
         raise ValueError('Mode list does not match for PREFIX: %r' % value)
 
-    return tuple(sorted(zip(modes, prefixes)))
+    return tuple(zip(modes, prefixes))
 
 
 ISUPPORT_PARSERS = {
@@ -113,6 +113,7 @@ ISUPPORT_PARSERS = {
     'HOSTLEN': int,
     'INVEX': _optional(_single_character, default='I'),
     'KICKLEN': int,
+    'LINELEN': int,
     'MAXLIST': _map_items(int),
     'MAXTARGETS': _optional(int),
     'MODES': _optional(int),
@@ -128,10 +129,37 @@ ISUPPORT_PARSERS = {
 }
 
 
+def _unescape_param(param):
+    """Handle escape sequences in ISUPPORT parameter values.
+
+    Sopel follows the recommendation of `modern.ircdocs.horse`__ which only
+    recognizes the escape sequences ``\\x20, \\x5C, \\x3D``. All other such
+    escape sequences will be passed through unaltered.
+
+    .. __: https://modern.ircdocs.horse/#rplisupport-005
+    """
+    HEX_PATTERN = r"\\x([0-9a-fA-F]{2})"
+
+    def _unescape(match):
+        num = match.group(1).upper()
+        if num == "20":
+            result = " "
+        elif num == "5C":
+            result = "\\"
+        elif num == "3D":
+            result = "="
+        else:
+            result = match.group(0)
+
+        return result
+
+    return re.sub(HEX_PATTERN, _unescape, param)
+
+
 def parse_parameter(arg):
     items = arg.split('=', 1)
     if len(items) == 2:
-        key, value = items
+        key, value = items[0], _unescape_param(items[1])
     else:
         key, value = items[0], None
 
@@ -143,7 +171,7 @@ def parse_parameter(arg):
     return (key, parser(value))
 
 
-class ISupport(object):
+class ISupport:
     """Storage class for IRC's ``ISUPPORT`` feature.
 
     An instance of ``ISupport`` can be used as a read-only dict, to store
@@ -168,6 +196,12 @@ class ISupport(object):
 
     The list of possible parameters can be found at
     `modern.ircdocs.horse's RPL_ISUPPORT Parameters`__.
+
+    .. important::
+
+        While this object's attributes and dict-like behavior are part of
+        Sopel's public API, its *methods* are considered internal code and
+        plugins should not call them.
 
     .. __: https://modern.ircdocs.horse/#rplisupport-parameters
     """
@@ -196,7 +230,7 @@ class ISupport(object):
         # make sure you can't set the value of any ISUPPORT attribute yourself
         if name == '_ISupport__isupport':
             # allow to set self.__isupport inside of the class
-            super(ISupport, self).__setattr__(name, value)
+            super().__setattr__(name, value)
         elif name in self.__isupport:
             # reject any modification of __isupport
             raise AttributeError("Can't set value for %r" % name)
@@ -328,7 +362,7 @@ class ISupport(object):
         return dict(self['MAXLIST'])
 
     @property
-    def PREFIX(self):
+    def PREFIX(self) -> dict[str, str]:
         """Expose ``PREFIX`` as a dict, if advertised by the server.
 
         This exposes information about the modes and nick prefixes used for
@@ -342,6 +376,8 @@ class ISupport(object):
                 'h': '%',
                 'v': '+',
             }
+
+        Entries are in order of descending privilege.
 
         This attribute is not available if the server does not provide the
         right information, and accessing it will raise an

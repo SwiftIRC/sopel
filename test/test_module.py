@@ -6,7 +6,7 @@
     compatible up to Sopel 9, when it will be removed.
 
 """
-from __future__ import generator_stop
+from __future__ import annotations
 
 import pytest
 
@@ -248,7 +248,7 @@ def test_action_commands():
     def mock(bot, trigger, match):
         return True
     assert mock.action_commands == ['sopel']
-    assert not hasattr(mock, 'intents')
+    assert not hasattr(mock, 'ctcp')
     assert not hasattr(mock, 'rule')
 
 
@@ -257,7 +257,7 @@ def test_action_commands_args():
     def mock(bot, trigger, match):
         return True
     assert mock.action_commands == ['sopel', 'bot']
-    assert not hasattr(mock, 'intents')
+    assert not hasattr(mock, 'ctcp')
     assert not hasattr(mock, 'rule')
 
 
@@ -268,7 +268,7 @@ def test_action_commands_multiple():
     def mock(bot, trigger, match):
         return True
     assert mock.action_commands == ['robot', 'bot', 'sopel']
-    assert not hasattr(mock, 'intents')
+    assert not hasattr(mock, 'ctcp')
     assert not hasattr(mock, 'rule')
 
 
@@ -282,7 +282,7 @@ def test_all_commands():
     assert mock.commands == ['sopel']
     assert mock.action_commands == ['me_sopel']
     assert mock.nickname_commands == ['name_sopel']
-    assert not hasattr(mock, 'intents')
+    assert not hasattr(mock, 'ctcp')
     assert not hasattr(mock, 'rule')
 
 
@@ -320,14 +320,14 @@ def test_intent():
     @module.intent('ACTION')
     def mock(bot, trigger, match):
         return True
-    assert mock.intents == ['ACTION']
+    assert mock.ctcp == ['ACTION']
 
 
 def test_intent_args():
     @module.intent('ACTION', 'OTHER')
     def mock(bot, trigger, match):
         return True
-    assert mock.intents == ['ACTION', 'OTHER']
+    assert mock.ctcp == ['ACTION', 'OTHER']
 
 
 def test_intent_multiple():
@@ -336,14 +336,26 @@ def test_intent_multiple():
     @module.intent('PING',)
     def mock(bot, trigger, match):
         return True
-    assert mock.intents == ['PING', 'OTHER', 'ACTION']
+    assert mock.ctcp == ['PING', 'OTHER', 'ACTION']
 
 
 def test_rate():
     @module.rate(5)
     def mock(bot, trigger, match):
         return True
-    assert mock.rate == 5
+    assert mock.user_rate == 5
+    assert mock.channel_rate == 0, 'Default channel_rate should be 0'
+    assert mock.global_rate == 0, 'Default global_rate should be 0'
+
+
+def test_rate_only_once():
+    @module.rate(10)
+    @module.rate(5)
+    def mock(bot, trigger, match):
+        return True
+    assert mock.user_rate == 5, 'Only the first decorator has effect.'
+    assert mock.channel_rate == 0, 'Only the first decorator has effect.'
+    assert mock.global_rate == 0, 'Only the first decorator has effect.'
 
 
 def test_require_privmsg(bot, trigger, trigger_pm):
@@ -388,11 +400,12 @@ def test_require_account(bot, trigger, trigger_account):
     assert mock_(bot, trigger_account) is True
 
 
-def test_require_privilege(bot, trigger):
+def test_require_privilege(bot, trigger, trigger_pm):
     @module.require_privilege(module.VOICE)
     def mock_v(bot, trigger, match=None):
         return True
     assert mock_v(bot, trigger) is True
+    assert mock_v(bot, trigger_pm) is not True
 
     @module.require_privilege(module.OP, 'You must be at least opped!')
     def mock_o(bot, trigger, match=None):

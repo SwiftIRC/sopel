@@ -14,7 +14,7 @@
 # Copyright 2020, Florian Strzelecki <florian.strzelecki@gmail.com>
 #
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
 import itertools
 import logging
@@ -50,8 +50,9 @@ class Scheduler(jobs.Scheduler):
 
     """
     def __init__(self, manager):
-        super(Scheduler, self).__init__(manager)
-        self._jobs = tools.SopelMemoryWithDefault(list)
+        super().__init__(manager)
+        # NOTE:the annotation and type-ignore here resolves conflict with the same attribute on the base class
+        self._jobs: tools.SopelMemoryWithDefault = tools.SopelMemoryWithDefault(list)  # type: ignore[assignment]
 
     def register(self, job):
         with self._mutex:

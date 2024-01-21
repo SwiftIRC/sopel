@@ -51,9 +51,9 @@ RUN_PYTEST=$([ "${SKIP_PYTEST}" = "1" ] && echo "0" || echo "1")
 # ./checkstyle first
 [ "${RUN_CHECKSTYLE}" -eq "1" ] \
     && {
-        echo -ne "\033[32mRunning \033[33mcheckstyle.sh \033[32mbefore ${_GIT_COMMAND}... \033[0m"
+        echo -ne "\033[32mRunning \033[33mflake8 \033[32mbefore ${_GIT_COMMAND}... \033[0m"
 
-        cs_output=$(./checkstyle.sh)
+        cs_output=$(flake8)
         cs="${?}"
         if [ "${cs}" -ne "0" ]; then
             echo -e '\033[91mFAILED.\033[0m'
@@ -67,9 +67,9 @@ RUN_PYTEST=$([ "${SKIP_PYTEST}" = "1" ] && echo "0" || echo "1")
 # pytest
 [ "${RUN_PYTEST}" -eq "1" ] \
     && {
-        echo -e "\033[32mRunning \033[33mpytest_run.py \033[32mbefore ${_GIT_COMMAND}... \033[0m"
+        echo -e "\033[32mRunning \033[33mpytest \033[32mbefore ${_GIT_COMMAND}... \033[0m"
 
-        python pytest_run.py
+        python -m pytest sopel test/
         pt="${?}"
         if [ "${pt}" -ne "0" ]; then
             echo -e '\033[91mFAILED.\033[0m'

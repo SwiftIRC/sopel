@@ -1,9 +1,11 @@
 """Tests for core ``sopel.irc``"""
-from __future__ import generator_stop
+from __future__ import annotations
 
 import pytest
 
 from sopel.tests import rawlist
+from sopel.tools import Identifier
+from sopel.tools.target import User
 
 
 TMP_CONFIG = """
@@ -27,9 +29,48 @@ def bot(tmpconfig, botfactory):
     return botfactory(tmpconfig)
 
 
+def test_make_identifier(bot):
+    nick = bot.make_identifier('Test[a]')
+    assert 'test{a}' == nick
+
+
+def test_make_identifier_memory(bot):
+    memory = bot.make_identifier_memory()
+    memory['Test[a]'] = True
+    assert memory['test{a}'] is True
+
+    memory['test{a}'] = False
+    assert len(memory) == 1
+    assert memory['Test[a]'] is False
+
+
 def prefix_length(bot):
     # ':', nick, '!', '~', ident/username, '@', maximum hostname length, <0x20>
     return 1 + len(bot.nick) + 1 + 1 + len(bot.user) + 1 + 63 + 1
+
+
+def test_safe_text_length_with_linelen_no_hostmask(tmpconfig, botfactory):
+    # this test doesn't work using only the plain `bot` fixture
+    bot = botfactory.preloaded(tmpconfig)
+
+    assert bot.hostmask is None
+    bot.on_message(
+        ':irc.example.com 005 Sopel NETWORK=LLTest LINELEN=1024 '
+        ':are supported by this server')
+    # normal lines are capped at 512 bytes, and 1024 is exactly twice that
+    # expect the extra 512 in full + the result of hostmask_unknown below
+    assert bot.safe_text_length('#channel') == 414 + 512
+
+
+def test_safe_text_length_hostmask_unknown(bot):
+    assert bot.hostmask is None
+    assert bot.safe_text_length('#channel') == 414
+
+
+def test_safe_text_length(bot):
+    bot.users[Identifier(bot.nick)] = User(bot.nick, bot.user, 'hostname')
+    assert bot.hostmask is not None
+    assert bot.safe_text_length('#channel') == 470
 
 
 def test_on_connect(bot):
@@ -225,7 +266,7 @@ def test_say_safe(bot):
 
 def test_say_long_fit(bot):
     """Test a long message that fits into the 512 bytes limit."""
-    text = 'a' * (512 - len('PRIVMSG #sopel :\r\n'))
+    text = 'a' * (512 - prefix_length(bot) - len('PRIVMSG #sopel :\r\n'))
     bot.say(text, '#sopel')
 
     assert bot.backend.message_sent == rawlist(
@@ -235,7 +276,7 @@ def test_say_long_fit(bot):
 
 def test_say_long_extra(bot):
     """Test a long message that doesn't fit into the 512 bytes limit."""
-    text = 'a' * (512 - len('PRIVMSG #sopel :\r\n'))
+    text = 'a' * (512 - prefix_length(bot) - len('PRIVMSG #sopel :\r\n'))
     bot.say(text + 'b', '#sopel')
 
     assert bot.backend.message_sent == rawlist(
@@ -340,7 +381,7 @@ def test_say_long_truncation_trailing(bot):
     )
 
 
-def test_say_no_repeat_protection(bot):
+def test_say_antiloop(bot):
     # five is fine
     bot.say('hello', '#sopel')
     bot.say('hello', '#sopel')
@@ -394,8 +435,73 @@ def test_say_no_repeat_protection(bot):
         'PRIVMSG #sopel :hello',
         'PRIVMSG #sopel :hello',
         'PRIVMSG #sopel :hello',
-        #  three time, then stop
+        #  three times, then stop
         'PRIVMSG #sopel :...',
         'PRIVMSG #sopel :...',
         'PRIVMSG #sopel :...',
+    )
+
+
+def test_say_antiloop_configuration(bot):
+    bot.settings.core.antiloop_threshold = 3
+    bot.settings.core.antiloop_silent_after = 2
+    bot.settings.core.antiloop_repeat_text = '???'
+
+    # three is fine now
+    bot.say('hello', '#sopel')
+    bot.say('hello', '#sopel')
+    bot.say('hello', '#sopel')
+
+    assert bot.backend.message_sent == rawlist(
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :hello',
+    )
+
+    # fourth: replaced by '???'
+    bot.say('hello', '#sopel')
+
+    assert bot.backend.message_sent == rawlist(
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :hello',
+        # the extra hello is replaced by '???'
+        'PRIVMSG #sopel :???',
+    )
+
+    # this one will add one more '???'
+    bot.say('hello', '#sopel')
+
+    assert bot.backend.message_sent == rawlist(
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :???',
+        # the new one is also replaced by '???'
+        'PRIVMSG #sopel :???',
+    )
+
+    # but at some point it just stops talking
+    bot.say('hello', '#sopel')
+
+    assert bot.backend.message_sent == rawlist(
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :hello',
+        'PRIVMSG #sopel :hello',
+        #  two times, then stop
+        'PRIVMSG #sopel :???',
+        'PRIVMSG #sopel :???',
+    )
+
+
+def test_say_antiloop_deactivated(bot):
+    bot.settings.core.antiloop_threshold = 0
+
+    # no more loop prevention
+    for _ in range(10):
+        bot.say('hello', '#sopel')
+
+    expected = ['PRIVMSG #sopel :hello'] * 10
+    assert bot.backend.message_sent == rawlist(*expected), (
+        'When antiloop is deactivated, messages must not be replaced.'
     )

@@ -1,5 +1,5 @@
 """Tests for the ``sopel.loader`` module."""
-from __future__ import generator_stop
+from __future__ import annotations
 
 import inspect
 import re
@@ -9,7 +9,7 @@ import pytest
 from sopel import loader, plugin, plugins
 
 
-MOCK_MODULE_CONTENT = """from __future__ import generator_stop
+MOCK_MODULE_CONTENT = """from __future__ import annotations
 import re
 
 from sopel import plugin
@@ -301,9 +301,16 @@ def test_clean_callable_default(tmpconfig, func):
     # Not added by default
     assert not hasattr(func, 'unblockable')
     assert not hasattr(func, 'priority')
-    assert not hasattr(func, 'rate')
+    assert not hasattr(func, 'user_rate')
     assert not hasattr(func, 'channel_rate')
     assert not hasattr(func, 'global_rate')
+    assert not hasattr(func, 'user_rate_message')
+    assert not hasattr(func, 'channel_rate_message')
+    assert not hasattr(func, 'global_rate_message')
+    assert not hasattr(func, 'default_rate_message')
+    assert not hasattr(func, 'echo')
+    assert not hasattr(func, 'allow_bots')
+    assert not hasattr(func, 'output_prefix')
     assert not hasattr(func, 'event')
     assert not hasattr(func, 'rule')
     assert not hasattr(func, 'find_rules')
@@ -314,12 +321,15 @@ def test_clean_callable_default(tmpconfig, func):
     assert not hasattr(func, 'commands')
     assert not hasattr(func, 'nickname_commands')
     assert not hasattr(func, 'action_commands')
-    assert not hasattr(func, 'intents')
+    assert not hasattr(func, 'ctcp')
 
 
 def test_clean_callable_command(tmpconfig, func):
     setattr(func, 'commands', ['test'])
     loader.clean_callable(func, tmpconfig)
+
+    assert hasattr(func, 'commands')
+    assert func.commands == ['test']
 
     # Default values
     assert hasattr(func, 'unblockable')
@@ -328,15 +338,48 @@ def test_clean_callable_command(tmpconfig, func):
     assert func.priority == 'medium'
     assert hasattr(func, 'thread')
     assert func.thread is True
-    assert hasattr(func, 'rate')
-    assert func.rate == 0
+    assert hasattr(func, 'user_rate')
+    assert func.user_rate == 0
     assert hasattr(func, 'channel_rate')
     assert func.channel_rate == 0
     assert hasattr(func, 'global_rate')
     assert func.global_rate == 0
+    assert hasattr(func, 'user_rate_message')
+    assert func.user_rate_message is None
+    assert hasattr(func, 'channel_rate_message')
+    assert func.channel_rate_message is None
+    assert hasattr(func, 'global_rate_message')
+    assert func.global_rate_message is None
+    assert hasattr(func, 'default_rate_message')
+    assert func.default_rate_message is None
+    assert hasattr(func, 'echo')
+    assert func.echo is False
+    assert hasattr(func, 'allow_bots')
+    assert func.allow_bots is False
+    assert hasattr(func, 'output_prefix')
+    assert func.output_prefix == ''
     assert hasattr(func, 'event')
     assert func.event == ['PRIVMSG']
     assert not hasattr(func, 'rule')
+
+    # idempotency
+    loader.clean_callable(func, tmpconfig)
+    assert func.commands == ['test']
+
+    assert func.unblockable is False
+    assert func.priority == 'medium'
+    assert func.thread is True
+    assert func.user_rate == 0
+    assert func.channel_rate == 0
+    assert func.global_rate == 0
+    assert func.user_rate_message is None
+    assert func.channel_rate_message is None
+    assert func.global_rate_message is None
+    assert func.default_rate_message is None
+    assert func.echo is False
+    assert func.allow_bots is False
+    assert func.output_prefix == ''
+    assert func.event == ['PRIVMSG']
 
 
 def test_clean_callable_event(tmpconfig, func):
@@ -353,12 +396,26 @@ def test_clean_callable_event(tmpconfig, func):
     assert func.priority == 'medium'
     assert hasattr(func, 'thread')
     assert func.thread is True
-    assert hasattr(func, 'rate')
-    assert func.rate == 0
+    assert hasattr(func, 'user_rate')
+    assert func.user_rate == 0
     assert hasattr(func, 'channel_rate')
     assert func.channel_rate == 0
     assert hasattr(func, 'global_rate')
     assert func.global_rate == 0
+    assert hasattr(func, 'user_rate_message')
+    assert func.user_rate_message is None
+    assert hasattr(func, 'channel_rate_message')
+    assert func.channel_rate_message is None
+    assert hasattr(func, 'global_rate_message')
+    assert func.global_rate_message is None
+    assert hasattr(func, 'default_rate_message')
+    assert func.default_rate_message is None
+    assert hasattr(func, 'echo')
+    assert func.echo is False
+    assert hasattr(func, 'allow_bots')
+    assert func.allow_bots is False
+    assert hasattr(func, 'output_prefix')
+    assert func.output_prefix == ''
 
     # idempotency
     loader.clean_callable(func, tmpconfig)
@@ -367,9 +424,16 @@ def test_clean_callable_event(tmpconfig, func):
     assert func.unblockable is False
     assert func.priority == 'medium'
     assert func.thread is True
-    assert func.rate == 0
+    assert func.user_rate == 0
     assert func.channel_rate == 0
     assert func.global_rate == 0
+    assert func.user_rate_message is None
+    assert func.channel_rate_message is None
+    assert func.global_rate_message is None
+    assert func.default_rate_message is None
+    assert func.echo is False
+    assert func.allow_bots is False
+    assert func.output_prefix == ''
 
 
 def test_clean_callable_rule(tmpconfig, func):
@@ -392,12 +456,26 @@ def test_clean_callable_rule(tmpconfig, func):
     assert func.priority == 'medium'
     assert hasattr(func, 'thread')
     assert func.thread is True
-    assert hasattr(func, 'rate')
-    assert func.rate == 0
+    assert hasattr(func, 'user_rate')
+    assert func.user_rate == 0
     assert hasattr(func, 'channel_rate')
     assert func.channel_rate == 0
     assert hasattr(func, 'global_rate')
     assert func.global_rate == 0
+    assert hasattr(func, 'user_rate_message')
+    assert func.user_rate_message is None
+    assert hasattr(func, 'channel_rate_message')
+    assert func.channel_rate_message is None
+    assert hasattr(func, 'global_rate_message')
+    assert func.global_rate_message is None
+    assert hasattr(func, 'default_rate_message')
+    assert func.default_rate_message is None
+    assert hasattr(func, 'echo')
+    assert func.echo is False
+    assert hasattr(func, 'allow_bots')
+    assert func.allow_bots is False
+    assert hasattr(func, 'output_prefix')
+    assert func.output_prefix == ''
 
     # idempotency
     loader.clean_callable(func, tmpconfig)
@@ -408,9 +486,16 @@ def test_clean_callable_rule(tmpconfig, func):
     assert func.unblockable is False
     assert func.priority == 'medium'
     assert func.thread is True
-    assert func.rate == 0
+    assert func.user_rate == 0
     assert func.channel_rate == 0
     assert func.global_rate == 0
+    assert func.user_rate_message is None
+    assert func.channel_rate_message is None
+    assert func.global_rate_message is None
+    assert func.default_rate_message is None
+    assert func.echo is False
+    assert func.allow_bots is False
+    assert func.output_prefix == ''
 
 
 def test_clean_callable_rule_nick(tmpconfig, func):
@@ -468,12 +553,26 @@ def test_clean_callable_find_rules(tmpconfig, func):
     assert func.priority == 'medium'
     assert hasattr(func, 'thread')
     assert func.thread is True
-    assert hasattr(func, 'rate')
-    assert func.rate == 0
+    assert hasattr(func, 'user_rate')
+    assert func.user_rate == 0
     assert hasattr(func, 'channel_rate')
     assert func.channel_rate == 0
     assert hasattr(func, 'global_rate')
     assert func.global_rate == 0
+    assert hasattr(func, 'user_rate_message')
+    assert func.user_rate_message is None
+    assert hasattr(func, 'channel_rate_message')
+    assert func.channel_rate_message is None
+    assert hasattr(func, 'global_rate_message')
+    assert func.global_rate_message is None
+    assert hasattr(func, 'default_rate_message')
+    assert func.default_rate_message is None
+    assert hasattr(func, 'echo')
+    assert func.echo is False
+    assert hasattr(func, 'allow_bots')
+    assert func.allow_bots is False
+    assert hasattr(func, 'output_prefix')
+    assert func.output_prefix == ''
 
     # idempotency
     loader.clean_callable(func, tmpconfig)
@@ -486,9 +585,16 @@ def test_clean_callable_find_rules(tmpconfig, func):
     assert func.unblockable is False
     assert func.priority == 'medium'
     assert func.thread is True
-    assert func.rate == 0
+    assert func.user_rate == 0
     assert func.channel_rate == 0
     assert func.global_rate == 0
+    assert func.user_rate_message is None
+    assert func.channel_rate_message is None
+    assert func.global_rate_message is None
+    assert func.default_rate_message is None
+    assert func.echo is False
+    assert func.allow_bots is False
+    assert func.output_prefix == ''
 
 
 def test_clean_callable_search_rules(tmpconfig, func):
@@ -513,12 +619,26 @@ def test_clean_callable_search_rules(tmpconfig, func):
     assert func.priority == 'medium'
     assert hasattr(func, 'thread')
     assert func.thread is True
-    assert hasattr(func, 'rate')
-    assert func.rate == 0
+    assert hasattr(func, 'user_rate')
+    assert func.user_rate == 0
     assert hasattr(func, 'channel_rate')
     assert func.channel_rate == 0
     assert hasattr(func, 'global_rate')
     assert func.global_rate == 0
+    assert hasattr(func, 'user_rate_message')
+    assert func.user_rate_message is None
+    assert hasattr(func, 'channel_rate_message')
+    assert func.channel_rate_message is None
+    assert hasattr(func, 'global_rate_message')
+    assert func.global_rate_message is None
+    assert hasattr(func, 'default_rate_message')
+    assert func.default_rate_message is None
+    assert hasattr(func, 'echo')
+    assert func.echo is False
+    assert hasattr(func, 'allow_bots')
+    assert func.allow_bots is False
+    assert hasattr(func, 'output_prefix')
+    assert func.output_prefix == ''
 
     # idempotency
     loader.clean_callable(func, tmpconfig)
@@ -531,9 +651,16 @@ def test_clean_callable_search_rules(tmpconfig, func):
     assert func.unblockable is False
     assert func.priority == 'medium'
     assert func.thread is True
-    assert func.rate == 0
+    assert func.user_rate == 0
     assert func.channel_rate == 0
     assert func.global_rate == 0
+    assert func.user_rate_message is None
+    assert func.channel_rate_message is None
+    assert func.global_rate_message is None
+    assert func.default_rate_message is None
+    assert func.echo is False
+    assert func.allow_bots is False
+    assert func.output_prefix == ''
 
 
 def test_clean_callable_nickname_command(tmpconfig, func):
@@ -552,12 +679,26 @@ def test_clean_callable_nickname_command(tmpconfig, func):
     assert func.priority == 'medium'
     assert hasattr(func, 'thread')
     assert func.thread is True
-    assert hasattr(func, 'rate')
-    assert func.rate == 0
+    assert hasattr(func, 'user_rate')
+    assert func.user_rate == 0
     assert hasattr(func, 'channel_rate')
     assert func.channel_rate == 0
     assert hasattr(func, 'global_rate')
     assert func.global_rate == 0
+    assert hasattr(func, 'user_rate_message')
+    assert func.user_rate_message is None
+    assert hasattr(func, 'channel_rate_message')
+    assert func.channel_rate_message is None
+    assert hasattr(func, 'global_rate_message')
+    assert func.global_rate_message is None
+    assert hasattr(func, 'default_rate_message')
+    assert func.default_rate_message is None
+    assert hasattr(func, 'echo')
+    assert func.echo is False
+    assert hasattr(func, 'allow_bots')
+    assert func.allow_bots is False
+    assert hasattr(func, 'output_prefix')
+    assert func.output_prefix == ''
 
     # idempotency
     loader.clean_callable(func, tmpconfig)
@@ -565,9 +706,16 @@ def test_clean_callable_nickname_command(tmpconfig, func):
     assert func.unblockable is False
     assert func.priority == 'medium'
     assert func.thread is True
-    assert func.rate == 0
+    assert func.user_rate == 0
     assert func.channel_rate == 0
     assert func.global_rate == 0
+    assert func.user_rate_message is None
+    assert func.channel_rate_message is None
+    assert func.global_rate_message is None
+    assert func.default_rate_message is None
+    assert func.echo is False
+    assert func.allow_bots is False
+    assert func.output_prefix == ''
 
 
 def test_clean_callable_action_command(tmpconfig, func):
@@ -789,15 +937,15 @@ def test_clean_callable_example_nickname_custom_prefix(tmpconfig, func):
     assert docs[1] == ['TestBot: hello']
 
 
-def test_clean_callable_intents(tmpconfig, func):
-    setattr(func, 'intents', [r'abc'])
+def test_clean_callable_ctcp(tmpconfig, func):
+    setattr(func, 'ctcp', [r'abc'])
     loader.clean_callable(func, tmpconfig)
 
-    assert hasattr(func, 'intents')
-    assert len(func.intents) == 1
+    assert hasattr(func, 'ctcp')
+    assert len(func.ctcp) == 1
 
     # Test the regex is compiled properly
-    regex = func.intents[0]
+    regex = func.ctcp[0]
     assert regex.match('abc')
     assert regex.match('abcd')
     assert regex.match('ABC')
@@ -811,24 +959,45 @@ def test_clean_callable_intents(tmpconfig, func):
     assert func.priority == 'medium'
     assert hasattr(func, 'thread')
     assert func.thread is True
-    assert hasattr(func, 'rate')
-    assert func.rate == 0
+    assert hasattr(func, 'user_rate')
+    assert func.user_rate == 0
     assert hasattr(func, 'channel_rate')
     assert func.channel_rate == 0
     assert hasattr(func, 'global_rate')
     assert func.global_rate == 0
+    assert hasattr(func, 'user_rate_message')
+    assert func.user_rate_message is None
+    assert hasattr(func, 'channel_rate_message')
+    assert func.channel_rate_message is None
+    assert hasattr(func, 'global_rate_message')
+    assert func.global_rate_message is None
+    assert hasattr(func, 'default_rate_message')
+    assert func.default_rate_message is None
+    assert hasattr(func, 'echo')
+    assert func.echo is False
+    assert hasattr(func, 'allow_bots')
+    assert func.allow_bots is False
+    assert hasattr(func, 'output_prefix')
+    assert func.output_prefix == ''
 
     # idempotency
     loader.clean_callable(func, tmpconfig)
-    assert len(func.intents) == 1
-    assert regex in func.intents
+    assert len(func.ctcp) == 1
+    assert regex in func.ctcp
 
     assert func.unblockable is False
     assert func.priority == 'medium'
     assert func.thread is True
-    assert func.rate == 0
+    assert func.user_rate == 0
     assert func.channel_rate == 0
     assert func.global_rate == 0
+    assert func.user_rate_message is None
+    assert func.channel_rate_message is None
+    assert func.global_rate_message is None
+    assert func.default_rate_message is None
+    assert func.echo is False
+    assert func.allow_bots is False
+    assert func.output_prefix == ''
 
 
 def test_clean_callable_url(tmpconfig, func):
@@ -844,18 +1013,39 @@ def test_clean_callable_url(tmpconfig, func):
     assert func.unblockable is False
     assert hasattr(func, 'thread')
     assert func.thread is True
-    assert hasattr(func, 'rate')
-    assert func.rate == 0
+    assert hasattr(func, 'user_rate')
+    assert func.user_rate == 0
     assert hasattr(func, 'channel_rate')
     assert func.channel_rate == 0
     assert hasattr(func, 'global_rate')
     assert func.global_rate == 0
+    assert hasattr(func, 'user_rate_message')
+    assert func.user_rate_message is None
+    assert hasattr(func, 'channel_rate_message')
+    assert func.channel_rate_message is None
+    assert hasattr(func, 'global_rate_message')
+    assert func.global_rate_message is None
+    assert hasattr(func, 'default_rate_message')
+    assert func.default_rate_message is None
+    assert hasattr(func, 'echo')
+    assert func.echo is False
+    assert hasattr(func, 'allow_bots')
+    assert func.allow_bots is False
+    assert hasattr(func, 'output_prefix')
+    assert func.output_prefix == ''
 
     # idempotency
     loader.clean_callable(func, tmpconfig)
     assert len(func.url_regex) == 1
     assert func.unblockable is False
     assert func.thread is True
-    assert func.rate == 0
+    assert func.user_rate == 0
     assert func.channel_rate == 0
     assert func.global_rate == 0
+    assert func.user_rate_message is None
+    assert func.channel_rate_message is None
+    assert func.global_rate_message is None
+    assert func.default_rate_message is None
+    assert func.echo is False
+    assert func.allow_bots is False
+    assert func.output_prefix == ''

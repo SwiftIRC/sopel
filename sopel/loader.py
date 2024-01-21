@@ -9,52 +9,16 @@
     Do **not** build your plugin based on what is here, you do **not** need to.
 
 """
-from __future__ import generator_stop
+from __future__ import annotations
 
 import inspect
 import logging
 import re
-import sys
 
 from sopel.config.core_section import COMMAND_DEFAULT_HELP_PREFIX
-from sopel.tools import deprecated
 
 
 LOGGER = logging.getLogger(__name__)
-
-
-@deprecated(
-    reason="Replaced by simple logic using inspect.getdoc()",
-    version='7.1',
-    removed_in='8.0',
-)
-def trim_docstring(doc):
-    """Get the docstring as a series of lines that can be sent.
-
-    :param str doc: a callable's docstring to trim
-    :return: a list of trimmed lines
-    :rtype: list
-
-    This function acts like :func:`inspect.cleandoc` but doesn't replace tabs,
-    and instead of a :class:`str` it returns a :class:`list`.
-    """
-    if not doc:
-        return []
-    lines = doc.expandtabs().splitlines()
-    indent = sys.maxsize
-    for line in lines[1:]:
-        stripped = line.lstrip()
-        if stripped:
-            indent = min(indent, len(line) - len(stripped))
-    trimmed = [lines[0].strip()]
-    if indent < sys.maxsize:
-        for line in lines[1:]:
-            trimmed.append(line[:].rstrip())
-    while trimmed and not trimmed[-1]:
-        trimmed.pop()
-    while trimmed and not trimmed[0]:
-        trimmed.pop(0)
-    return trimmed
 
 
 def clean_callable(func, config):
@@ -84,9 +48,13 @@ def clean_callable(func, config):
     if is_limitable(func):
         # These attributes are a waste of memory on callables that don't pass
         # through Sopel's rate-limiting machinery
-        func.rate = getattr(func, 'rate', 0)
+        func.user_rate = getattr(func, 'user_rate', 0)
         func.channel_rate = getattr(func, 'channel_rate', 0)
         func.global_rate = getattr(func, 'global_rate', 0)
+        func.user_rate_message = getattr(func, 'user_rate_message', None)
+        func.channel_rate_message = getattr(func, 'channel_rate_message', None)
+        func.global_rate_message = getattr(func, 'global_rate_message', None)
+        func.default_rate_message = getattr(func, 'default_rate_message', None)
         func.unblockable = getattr(func, 'unblockable', False)
 
     if not is_triggerable(func) and not is_url_callback(func):
@@ -94,6 +62,7 @@ def clean_callable(func, config):
         # confusing to other code (and a waste of memory) for jobs.
         return
 
+    func.allow_bots = getattr(func, 'allow_bots', False)
     func.echo = getattr(func, 'echo', False)
     func.priority = getattr(func, 'priority', 'medium')
     func.output_prefix = getattr(func, 'output_prefix', '')
@@ -105,8 +74,13 @@ def clean_callable(func, config):
 
     if any(hasattr(func, attr) for attr in ['commands', 'nickname_commands', 'action_commands']):
         if hasattr(func, 'example'):
-            # If no examples are flagged as user-facing, just show the first one like Sopel<7.0 did
-            examples = [rec["example"] for rec in func.example if rec["help"]] or [func.example[0]["example"]]
+            # If no examples are flagged as user-facing,
+            # just show the first one like Sopel<7.0 did
+            examples = [
+                rec["example"]
+                for rec in func.example
+                if rec["is_help"]
+            ] or [func.example[0]["example"]]
             for i, example in enumerate(examples):
                 example = example.replace('$nickname', nick)
                 if example[0] != help_prefix and not example.startswith(nick):
@@ -114,20 +88,20 @@ def clean_callable(func, config):
                         COMMAND_DEFAULT_HELP_PREFIX, help_prefix, 1)
                 examples[i] = example
         if doc or examples:
-            cmds = []
+            cmds: list[str] = []
             cmds.extend(getattr(func, 'commands', []))
             cmds.extend(getattr(func, 'nickname_commands', []))
             for command in cmds:
                 func._docs[command] = (doc, examples)
 
-    if hasattr(func, 'intents'):
+    if hasattr(func, 'ctcp'):
         # Can be implementation-dependent
         _regex_type = type(re.compile(''))
-        func.intents = [
-            (intent
-                if isinstance(intent, _regex_type)
-                else re.compile(intent, re.IGNORECASE))
-            for intent in func.intents
+        func.ctcp = [
+            (ctcp_pattern
+                if isinstance(ctcp_pattern, _regex_type)
+                else re.compile(ctcp_pattern, re.IGNORECASE))
+            for ctcp_pattern in func.ctcp
         ]
 
 
@@ -154,7 +128,7 @@ def is_limitable(obj):
         'search_rules',
         'search_rules_lazy_loaders',
         'event',
-        'intents',
+        'ctcp',
         'commands',
         'nickname_commands',
         'action_commands',
@@ -174,8 +148,8 @@ def is_triggerable(obj):
 
     A triggerable is a callable that will be used by the bot to handle a
     particular trigger (i.e. an IRC message): it can be a regex rule, an
-    event, an intent, a command, a nickname command, or an action command.
-    However, it must not be a job or a URL callback.
+    event, a CTCP command, a command, a nickname command, or an action
+    command. However, it must not be a job or a URL callback.
 
     .. seealso::
 
@@ -198,7 +172,7 @@ def is_triggerable(obj):
         'search_rules',
         'search_rules_lazy_loaders',
         'event',
-        'intents',
+        'ctcp',
         'commands',
         'nickname_commands',
         'action_commands',

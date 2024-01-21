@@ -5,7 +5,7 @@
 # Copyright 2014, Elsie Powell, embolalia.com
 # Copyright 2019, dgw, technobabbl.es
 # Licensed under the Eiffel Forum License 2.
-from __future__ import generator_stop
+from __future__ import annotations
 
 from enum import Enum
 import re
@@ -23,6 +23,9 @@ __all__ = [
     'CONTROL_STRIKETHROUGH',
     'CONTROL_MONOSPACE',
     'CONTROL_REVERSE',
+    # convenience lists
+    'CONTROL_FORMATTING',
+    'CONTROL_NON_PRINTING',
     # utility functions
     'color',
     'hex_color',
@@ -125,6 +128,7 @@ PLAIN_REGEX = re.compile(PLAIN_PATTERN)
 
 
 class colors(str, Enum):
+    """Mapping of color names to mIRC code values."""
     # Mostly aligned with https://modern.ircdocs.horse/formatting.html#colors
     # which are likely based on mIRC's color names (https://www.mirc.com/colors.html)
     WHITE = '00'
@@ -188,12 +192,15 @@ def color(text, fg=None, bg=None):
     :param str text: the text to format
     :param mixed fg: the foreground color
     :param mixed bg: the background color
+    :raises TypeError: if ``text`` is not a string
+    :raises ValueError: if ``fg`` or ``bg`` is an unrecognized color value
+    :rtype: str
 
     The color can be a string of the color name, or an integer in the range
     0-99. The known color names can be found in the :class:`colors` class of
     this module.
     """
-    if not fg and not bg:
+    if fg is None and bg is None:
         return text
 
     fg = _get_color(fg)
@@ -231,6 +238,9 @@ def hex_color(text, fg=None, bg=None):
     :param str text: the text to format
     :param str fg: the foreground color
     :param str bg: the background color
+    :raises TypeError: if ``text`` is not a string
+    :raises ValueError: if ``fg`` or ``bg`` is an unrecognized color value
+    :rtype: str
 
     The color can be provided with a string of either 3 or 6 hexadecimal digits.
     As in CSS, 3-digit colors will be interpreted as if they were 6-digit colors
@@ -238,7 +248,7 @@ def hex_color(text, fg=None, bg=None):
     not include the leading ``#`` symbol.
 
     .. note::
-        This is a relatively new IRC formatting convention. Use only when you
+        This is a relatively new IRC formatting convention. Use it only when you
         can afford to have its meaning lost, as not many clients support it yet.
     """
     if not fg and not bg:
@@ -258,6 +268,8 @@ def bold(text):
     """Return the text, with bold IRC formatting.
 
     :param str text: the text to format
+    :raises TypeError: if ``text`` is not a string
+    :rtype: str
     """
     return ''.join([CONTROL_BOLD, text, CONTROL_BOLD])
 
@@ -266,6 +278,8 @@ def italic(text):
     """Return the text, with italic IRC formatting.
 
     :param str text: the text to format
+    :raises TypeError: if ``text`` is not a string
+    :rtype: str
     """
     return ''.join([CONTROL_ITALIC, text, CONTROL_ITALIC])
 
@@ -274,6 +288,8 @@ def underline(text):
     """Return the text, with underline IRC formatting.
 
     :param str text: the text to format
+    :raises TypeError: if ``text`` is not a string
+    :rtype: str
     """
     return ''.join([CONTROL_UNDERLINE, text, CONTROL_UNDERLINE])
 
@@ -282,9 +298,11 @@ def strikethrough(text):
     """Return the text, with strikethrough IRC formatting.
 
     :param str text: the text to format
+    :raises TypeError: if ``text`` is not a string
+    :rtype: str
 
     .. note::
-        This is a relatively new IRC formatting convention. Use only when you
+        This is a relatively new IRC formatting convention. Use it only when you
         can afford to have its meaning lost, as not many clients support it yet.
     """
     return ''.join([CONTROL_STRIKETHROUGH, text, CONTROL_STRIKETHROUGH])
@@ -294,9 +312,11 @@ def monospace(text):
     """Return the text, with monospace IRC formatting.
 
     :param str text: the text to format
+    :raises TypeError: if ``text`` is not a string
+    :rtype: str
 
     .. note::
-        This is a relatively new IRC formatting convention. Use only when you
+        This is a relatively new IRC formatting convention. Use it only when you
         can afford to have its meaning lost, as not many clients support it yet.
     """
     return ''.join([CONTROL_MONOSPACE, text, CONTROL_MONOSPACE])
@@ -306,6 +326,8 @@ def reverse(text):
     """Return the text, with reverse-color IRC formatting.
 
     :param str text: the text to format
+    :raises TypeError: if ``text`` is not a string
+    :rtype: str
 
     .. note::
         This code isn't super well supported, and its behavior even in clients
@@ -318,6 +340,7 @@ def plain(text):
     """Return the text without any IRC formatting.
 
     :param str text: text with potential IRC formatting control code(s)
+    :raises TypeError: if ``text`` is not a string
     :rtype: str
     """
     if '\x03' in text or '\x04' in text:
