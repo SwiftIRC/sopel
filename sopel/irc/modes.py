@@ -39,6 +39,7 @@ from typing import (
     TYPE_CHECKING,
 )
 
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -100,7 +101,7 @@ class ModeException(Exception):
 
 class ModeTypeUnknown(ModeException):
     """Exception when a mode's type is unknown or cannot be determined."""
-    def __init__(self, mode) -> None:
+    def __init__(self, mode: str) -> None:
         super().__init__('Unknown type for mode %s' % mode)
 
 

@@ -13,6 +13,7 @@ from typing import cast, NamedTuple, Optional, TYPE_CHECKING, Union
 
 import pytz
 
+
 if TYPE_CHECKING:
     from sopel.config import Config
     from sopel.db import SopelDB
@@ -94,7 +95,7 @@ def validate_timezone(zone: Optional[str]) -> str:
     except pytz.exceptions.UnknownTimeZoneError:
         raise ValueError('Invalid time zone.')
 
-    return cast(str, tz.zone)
+    return cast('str', tz.zone)
 
 
 def validate_format(tformat: str) -> str:

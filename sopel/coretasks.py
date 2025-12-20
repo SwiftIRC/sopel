@@ -36,6 +36,7 @@ from sopel import config, plugin
 from sopel.irc import isupport, utils
 from sopel.tools import events, jobs, SopelMemory, target
 
+
 if TYPE_CHECKING:
     from sopel.bot import Sopel, SopelWrapper
     from sopel.tools import Identifier
@@ -147,6 +148,7 @@ def _handle_sasl_capability(
 CAP_ECHO_MESSAGE = plugin.capability('echo-message')
 CAP_MULTI_PREFIX = plugin.capability('multi-prefix')
 CAP_AWAY_NOTIFY = plugin.capability('away-notify')
+CAP_INVITE_NOTIFY = plugin.capability('invite-notify')
 CAP_CHGHOST = plugin.capability('chghost')
 CAP_CAP_NOTIFY = plugin.capability('cap-notify')
 CAP_SERVER_TIME = plugin.capability('server-time')
@@ -159,9 +161,10 @@ CAP_EXTENDED_JOIN = plugin.capability(
 CAP_ACCOUNT_TAG = plugin.capability(
     'account-tag', handler=_handle_account_and_extjoin_capabilities)
 CAP_SASL = plugin.capability('sasl', handler=_handle_sasl_capability)
+CAP_SETNAME = plugin.capability('setname')
 
 
-def setup(bot: Sopel):
+def setup(bot: Sopel) -> None:
     """Set up the coretasks plugin.
 
     The setup phase is used to activate the throttle feature to prevent a flood
@@ -846,6 +849,29 @@ def track_nicks(bot, trigger):
 
 
 @plugin.rule('(.*)')
+@plugin.event('SETNAME')
+@plugin.thread(False)
+@plugin.unblockable
+@plugin.priority('medium')
+def handle_setname(bot, trigger):
+    """Update a user's realname when notified by the IRC server."""
+    user = bot.users.get(trigger.nick)
+    if not user:
+        LOGGER.debug(
+            "Discarding SETNAME (%r) received for unknown user %s.",
+            trigger, trigger.nick,
+        )
+        return
+
+    new_realname = str(trigger)
+    LOGGER.info(
+        "User named %r changed realname to %r.",
+        str(user.realname), new_realname,
+    )
+    user.realname = new_realname
+
+
+@plugin.rule('(.*)')
 @plugin.event('PART')
 @plugin.thread(False)
 @plugin.unblockable
@@ -939,6 +965,16 @@ def _periodic_send_who(bot):
         # selected_channel's last who is either none or the oldest valid
         LOGGER.debug("Sending WHO for channel: %s", selected_channel)
         _send_who(bot, selected_channel)
+
+
+@plugin.event('INVITE')
+@plugin.thread(False)
+@plugin.unblockable
+@plugin.priority('medium')
+def track_invite(bot, trigger):
+    """Track users being invited to channels."""
+    LOGGER.info(
+        '%s invited %s to %s', trigger.nick, trigger.args[0], trigger.args[1])
 
 
 @plugin.event('JOIN')
@@ -1261,7 +1297,7 @@ def _make_sasl_plain_token(account, password):
 @plugin.thread(False)
 @plugin.unblockable
 @plugin.priority('medium')
-def sasl_success(bot: SopelWrapper, trigger: Trigger):
+def sasl_success(bot: SopelWrapper, trigger: Trigger) -> None:
     """Resume capability negotiation on successful SASL auth."""
     LOGGER.info("Successful SASL Auth.")
     bot.resume_capability_negotiation(CAP_SASL.cap_req, 'coretasks')
@@ -1354,6 +1390,7 @@ def _get_sasl_pass_and_mech(bot):
 
 @plugin.commands('blocks')
 @plugin.example(r'.blocks del nick falsep0sitive', user_help=True)
+@plugin.example(r'.blocks add hostmask Guest.*!.*@public\.test\.client', user_help=True)
 @plugin.example(r'.blocks add host some\.malicious\.network', user_help=True)
 @plugin.example(r'.blocks add nick sp(a|4)mb(o|0)t\d*', user_help=True)
 @plugin.thread(False)
@@ -1363,19 +1400,21 @@ def _get_sasl_pass_and_mech(bot):
 def blocks(bot, trigger):
     """Manage Sopel's blocking features.
 
-    Full argspec: `list [nick|host]` or `[add|del] [nick|host] pattern`
+    Full argspec: `list [nick|host|hostmask]` or `[add|del] [nick|host|hostmask] pattern`
     """
     STRINGS = {
         "success_del": "Successfully deleted block: %s",
         "success_add": "Successfully added block: %s",
         "no_nick": "No matching nick block found for: %s",
         "no_host": "No matching host block found for: %s",
-        "invalid": "Invalid format for %s a block. Try: .blocks add (nick|host) sopel",
+        "no_hostmask": "No matching hostmask block found for: %s",
+        "invalid": "Invalid format for %s a block. Try: .blocks add (nick|host|hostmask) pattern",
         "invalid_display": "Invalid input for displaying blocks.",
         "nonelisted": "No %s listed in the blocklist.",
         'huh': "I could not figure out what you wanted to do.",
     }
 
+    hostmasks = set(s for s in bot.config.core.hostmask_blocks if s != '')
     hosts = set(s for s in bot.config.core.host_blocks if s != '')
     nicks = set(bot.make_identifier(nick)
                 for nick in bot.config.core.nick_blocks
@@ -1395,6 +1434,12 @@ def blocks(bot, trigger):
                 bot.say("Blocked nicks: {}".format(blocked))
             else:
                 bot.reply(STRINGS['nonelisted'] % ('nicks'))
+        elif text[2] == "hostmask":
+            if len(hostmasks) > 0:
+                blocked = ', '.join(str(hostmask) for hostmask in hostmasks)
+                bot.say("Blocked hostmasks: {}".format(blocked))
+            else:
+                bot.reply(STRINGS['nonelisted'] % ('hostmasks'))
         else:
             bot.reply(STRINGS['invalid_display'])
 
@@ -1406,6 +1451,10 @@ def blocks(bot, trigger):
         elif text[2] == "host":
             hosts.add(text[3].lower())
             bot.config.core.host_blocks = list(hosts)
+            bot.config.save()
+        elif text[2] == "hostmask":
+            hostmasks.add(text[3])
+            bot.config.core.hostmask_blocks = list(hostmasks)
             bot.config.save()
         else:
             bot.reply(STRINGS['invalid'] % ("adding"))
@@ -1430,6 +1479,15 @@ def blocks(bot, trigger):
                 return
             hosts.remove(host)
             bot.config.core.host_blocks = [str(m) for m in hosts]
+            bot.config.save()
+            bot.reply(STRINGS['success_del'] % (text[3]))
+        elif text[2] == "hostmask":
+            hostmask = text[3]
+            if hostmask not in hostmasks:
+                bot.reply(STRINGS['no_hostmask'] % (text[3]))
+                return
+            hostmasks.remove(hostmask)
+            bot.config.core.hostmask_blocks = [str(m) for m in hostmasks]
             bot.config.save()
             bot.reply(STRINGS['success_del'] % (text[3]))
         else:
@@ -1514,7 +1572,7 @@ def _record_who(
     away: Optional[bool] = None,
     is_bot: Optional[bool] = None,
     modes: Optional[str] = None,
-):
+) -> None:
     nick = bot.make_identifier(nick)
     channel = bot.make_identifier(channel)
     if nick not in bot.users:
@@ -1537,6 +1595,11 @@ def _record_who(
         usr.away = away
     if is_bot is not None:
         usr.is_bot = is_bot
+
+    # `*` placeholder is returned for users with no visible channels; see #2675
+    if channel == '*':
+        return
+
     priv = 0
     if modes:
         mapping = {
@@ -1549,6 +1612,7 @@ def _record_who(
         }
         for c in modes:
             priv = priv | mapping[c]
+
     if channel not in bot.channels:
         bot.channels[channel] = target.Channel(
             channel,
@@ -1612,15 +1676,21 @@ def track_topic(bot, trigger):
 def handle_url_callbacks(bot, trigger):
     """Dispatch callbacks on URLs
 
-    For each URL found in the trigger, trigger the URL callback registered by
-    the ``@url`` decorator.
+    For each URL found in the trigger, trigger the URL callback registered
+    through the now deprecated :meth:`sopel.bot.Sopel.register_url_callback`.
+
+    .. deprecated:: 8.1
+
+        This is deprecated and will be removed in Sopel 9.0.
+
     """
     # find URLs in the trigger
     for url in trigger.urls:
         # find callbacks for said URL
-        for function, match in bot.search_url_callbacks(url):
+        for pattern, function in bot._url_callbacks.items():
+            match = pattern.search(url)
             # trigger callback defined by the `@url` decorator
-            if hasattr(function, 'url_regex'):
+            if match and hasattr(function, 'url_regex'):
                 # bake the `match` argument in before passing the callback on
                 @functools.wraps(function)
                 def decorated(bot, trigger):

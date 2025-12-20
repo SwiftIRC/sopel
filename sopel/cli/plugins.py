@@ -6,6 +6,7 @@ import inspect
 import operator
 
 from sopel import config, plugins
+
 from . import utils
 
 
@@ -283,6 +284,7 @@ def handle_show(options):
         })
 
     print('Plugin:', description['name'])
+    print('Version:', description['version'] or 'unknown')
     print('Status:', description['status'])
     print('Type:', description['type'])
     print('Source:', description['source'])

@@ -16,6 +16,7 @@ import logging
 from sopel import plugin
 from sopel.config import types
 
+
 LOGGER = logging.getLogger(__name__)
 
 ERROR_JOIN_NO_CHANNEL = 'Which channel should I join?'
@@ -225,8 +226,8 @@ def quit(bot, trigger):
     bot.quit(quit_message)
 
 
-@plugin.require_privmsg
 @plugin.require_owner
+@plugin.require_privmsg('This command only works as a private message.')
 @plugin.command('raw')
 @plugin.priority('low')
 @plugin.example('.raw PRIVMSG NickServ :CERT ADD')
@@ -242,8 +243,8 @@ def raw(bot, trigger):
     bot.write([trigger.group(2)])
 
 
-@plugin.require_privmsg
 @plugin.require_admin
+@plugin.require_privmsg('This command only works as a private message.')
 @plugin.command('say', 'msg')
 @plugin.priority('low')
 @plugin.example('.say #YourPants Does anyone else smell neurotoxin?')
@@ -265,8 +266,8 @@ def say(bot, trigger):
     bot.say(message, channel)
 
 
-@plugin.require_privmsg
 @plugin.require_admin
+@plugin.require_privmsg('This command only works as a private message.')
 @plugin.command('me')
 @plugin.priority('low')
 def me(bot, trigger):
@@ -291,7 +292,13 @@ def me(bot, trigger):
 @plugin.priority('low')
 def invite_join(bot, trigger):
     """Join a channel Sopel is invited to, if the inviter is an admin."""
+    nick = trigger.args[0]
     channel = trigger.args[1]
+
+    if nick != bot.nick:
+        # this handler only cares if the invitee was the bot
+        return
+
     if trigger.admin:
         LOGGER.info(
             'Got invited to "%s" by an admin.', channel)

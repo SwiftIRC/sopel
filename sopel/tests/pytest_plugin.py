@@ -10,7 +10,14 @@ import sys
 import pytest
 
 from sopel import bot, loader, plugins, trigger
-from .factories import BotFactory, ConfigFactory, IRCFactory, TriggerFactory, UserFactory
+
+from .factories import (
+    BotFactory,
+    ConfigFactory,
+    IRCFactory,
+    TriggerFactory,
+    UserFactory,
+)
 
 
 TEMPLATE_TEST_CONFIG = """
@@ -18,6 +25,8 @@ TEMPLATE_TEST_CONFIG = """
 nick = {name}
 owner = {owner}
 admin = {admin}
+# avoid wasting cycles in time.sleep() during `repeat`ed tests
+flood_max_wait = 0
 """
 
 
